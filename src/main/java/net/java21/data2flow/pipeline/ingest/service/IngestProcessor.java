@@ -321,7 +321,8 @@ public class IngestProcessor {
     private boolean isDuplicate(MessageDraft d, String key) {
         RawEnvelope env = d.envelope;
         Duration window = properties.ingest().dedupWindow();
-        boolean dup = deps.dedup.seen(d.partition, env.organizationId(), key, env.receivedAt())
+        // 재처리는 자기 자신을 파티션 캐시에서 찾지 않도록 DB(자기 messageId 제외)만 본다
+        boolean dup = (!d.reprocessing() && deps.dedup.seen(d.partition, env.organizationId(), key, env.receivedAt()))
                 || deps.raws.existsDuplicate(env.organizationId(), key, env.receivedAt().minus(window),
                 env.receivedAt().plus(window), env.messageId());
         if (dup) {

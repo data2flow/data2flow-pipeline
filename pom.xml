@@ -186,6 +186,29 @@
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
             </plugin>
+            <!-- 라이선스 정책(ADR-008·018): GraalJS Oracle판(GFTC)·enterprise·isolate 런타임 금지 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>ban-non-community-graal</id>
+                        <goals><goal>enforce</goal></goals>
+                        <configuration>
+                            <rules>
+                                <bannedDependencies>
+                                    <excludes>
+                                        <exclude>org.graalvm.polyglot:js</exclude>
+                                        <exclude>org.graalvm.polyglot:js-isolate</exclude>
+                                        <exclude>org.graalvm.truffle:truffle-enterprise</exclude>
+                                        <exclude>org.graalvm.polyglot:*-isolate</exclude>
+                                    </excludes>
+                                </bannedDependencies>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <!-- *IT는 failsafe로 verify 단계에서 실행(design/testing) -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

@@ -18,17 +18,25 @@ import java.util.Optional;
 @OrganizationScopeExempt("모든 조직을 한 번에 처리하는 집계 작업(design/erd/pipeline.md §3.4)")
 public class AggregateRepository {
 
+    /**
+     * 원본 → 1m. 상태형 측정 항목(door 등)의 켜짐 시간·변화 수는 구간 경계를 넘는 값을 이어 보려고 1시간 앞의 점까지 읽는다
+     * (구간 첫 점 앞의 [구간 시작, 첫 점) 부분은 직전 값으로 센다). 점이 없는 분은 행이 없다.
+     */
     private static final String MINUTE_SQL = """
             WITH src AS (
                 SELECT device_id, metric_key, organization_id, time, value, quality, is_virtual,
                        date_bin('1 minute', time, TIMESTAMPTZ '2000-01-01 00:00:00+00') AS bucket
                   FROM data2flow_pipeline.telemetry
-                 WHERE time >= :from AND time < :to %s
+                 WHERE time >= :lookback AND time < :to %s
             ), ordered AS (
                 SELECT src.*,
-                       lead(time) OVER w AS next_time,
-                       lag(value) OVER w AS prev_value
-                  FROM src WINDOW w AS (PARTITION BY device_id, metric_key, bucket ORDER BY time)
+                       lead(time) OVER wa AS next_all,
+                       lag(value) OVER wa AS prev_all,
+                       lead(time) OVER wb AS next_time,
+                       row_number() OVER wb AS rn
+                  FROM src
+                WINDOW wa AS (PARTITION BY device_id, metric_key ORDER BY time),
+                       wb AS (PARTITION BY device_id, metric_key, bucket ORDER BY time)
             )
             INSERT INTO data2flow_pipeline.telemetry_1m AS t (device_id, metric_key, bucket, organization_id, count, count_all,
                 avg, min, max, sum, first, last, first_time, last_time, twa, state_on_sec, state_changes, is_virtual)
@@ -51,12 +59,15 @@ public class AggregateRepository {
                                       avg(value) FILTER (WHERE quality IN (0, 4)))
                         ELSE avg(value) FILTER (WHERE quality IN (0, 4)) END,
                    CASE WHEN metric_key = ANY(:stateKeys)
-                        THEN coalesce(sum(extract(epoch FROM (coalesce(next_time, bucket + interval '1 minute') - time)))
-                                      FILTER (WHERE value = 1), 0)::int END,
+                        THEN round(coalesce(sum(extract(epoch FROM (least(coalesce(next_all, bucket + interval '1 minute'),
+                                      bucket + interval '1 minute') - time))) FILTER (WHERE value = 1), 0)
+                             + coalesce(max(extract(epoch FROM (time - bucket))) FILTER (WHERE rn = 1 AND prev_all = 1), 0))::int
+                   END,
                    CASE WHEN metric_key = ANY(:stateKeys)
-                        THEN (count(*) FILTER (WHERE prev_value IS NOT NULL AND prev_value <> value))::int END,
+                        THEN (count(*) FILTER (WHERE prev_all IS NOT NULL AND prev_all <> value))::int END,
                    bool_or(is_virtual)
               FROM ordered
+             WHERE bucket >= :from
              GROUP BY device_id, metric_key, bucket
             ON CONFLICT (device_id, metric_key, bucket) DO UPDATE SET
                 organization_id = EXCLUDED.organization_id, count = EXCLUDED.count, count_all = EXCLUDED.count_all,
@@ -118,7 +129,8 @@ public class AggregateRepository {
                     .param("to", Timestamp.from(to)).update();
         }
         var spec = jdbc.sql(MINUTE_SQL.formatted(one ? "AND device_id = :device AND metric_key = :key" : ""))
-                .param("from", Timestamp.from(from)).param("to", Timestamp.from(to)).param("stateKeys", stateKeys);
+                .param("from", Timestamp.from(from)).param("to", Timestamp.from(to))
+                .param("lookback", Timestamp.from(from.minus(java.time.Duration.ofHours(1)))).param("stateKeys", stateKeys);
         if (one) {
             spec = spec.param("device", deviceId).param("key", metricKey);
         }

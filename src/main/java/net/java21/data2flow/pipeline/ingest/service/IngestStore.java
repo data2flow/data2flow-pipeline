@@ -206,9 +206,16 @@ public class IngestStore {
         }
         d.trace.put("instance", properties.instanceId());
         if (d.existing != null) {
-            d.trace.put("attempts", mapper.createArrayNode().addObject()
-                    .put("at", now.toString()).put("status", d.status.name())
-                    .put("errorCode", d.errorCode));
+            // 재처리 시도 이력(ING domain-model: processing_trace.attempts[])
+            tools.jackson.databind.node.ArrayNode attempts = mapper.createArrayNode();
+            if (d.existing.processingTrace() != null) {
+                tools.jackson.databind.JsonNode previous = mapper.readTree(d.existing.processingTrace()).get("attempts");
+                if (previous != null && previous.isArray()) {
+                    previous.forEach(attempts::add);
+                }
+            }
+            attempts.addObject().put("at", now.toString()).put("status", d.status.name()).put("errorCode", d.errorCode);
+            d.trace.put("attempts", attempts);
         }
         return new RawMessageRow(rawId, d.envelope.organizationId(), d.envelope.sourceId(),
                 d.device == null ? null : d.device.deviceId(), d.envelope.messageId(), d.envelope.sourceType(),
