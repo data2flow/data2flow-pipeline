@@ -1,0 +1,72 @@
+{
+  "externalId": "24e124128c067999",
+  "measuredAt": "2026-10-03T02:40:13.140Z",
+  "values": [
+    {
+      "key": "co2",
+      "value": 1150,
+      "unit": null
+    },
+    {
+      "key": "tvoc",
+      "value": 39,
+      "unit": null
+    },
+    {
+      "key": "pressure",
+      "value": 1004,
+      "unit": null
+    },
+    {
+      "key": "illumination",
+      "value": 2,
+      "unit": null
+    },
+    {
+      "key": "infrared",
+      "value": 0,
+      "unit": null
+    },
+    {
+      "key": "infrared_and_visible",
+      "value": 3,
+      "unit": null
+    },
+    {
+      "key": "activity",
+      "value": 18,
+      "unit": null
+    },
+    {
+      "key": "temperature",
+      "value": 22.3,
+      "unit": null
+    },
+    {
+      "key": "humidity",
+      "value": 44.5,
+      "unit": null
+    },
+    {
+      "key": "battery",
+      "value": 88,
+      "unit": null
+    }
+  ],
+  "link": {
+    "rssi": -75,
+    "snr": 8.0,
+    "frameCounter": 77120,
+    "gateways": [
+      {
+        "eui": "24e124fffef79304",
+        "rssi": -75,
+        "snr": 8.0
+      }
+    ]
+  },
+  "tags": {
+    "location": "실습실",
+    "point": "후면 오른쪽"
+  }
+}

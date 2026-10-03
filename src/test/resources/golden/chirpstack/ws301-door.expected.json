@@ -1,0 +1,37 @@
+{
+  "externalId": "24e124538b223344",
+  "measuredAt": "2026-10-03T02:41:00Z",
+  "values": [
+    {
+      "key": "battery",
+      "value": 91,
+      "unit": null
+    },
+    {
+      "key": "magnet_status",
+      "value": "open",
+      "unit": null
+    },
+    {
+      "key": "install_status",
+      "value": "yes",
+      "unit": null
+    }
+  ],
+  "link": {
+    "rssi": -60,
+    "snr": 11.0,
+    "frameCounter": 801,
+    "gateways": [
+      {
+        "eui": "24e124fffef79304",
+        "rssi": -60,
+        "snr": 11.0
+      }
+    ]
+  },
+  "tags": {
+    "location": "실습실",
+    "point": "출입문"
+  }
+}

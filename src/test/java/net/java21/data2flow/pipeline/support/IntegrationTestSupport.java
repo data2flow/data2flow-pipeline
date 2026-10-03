@@ -88,15 +88,18 @@ public abstract class IntegrationTestSupport {
     protected TestStreams.TelemetryCollector telemetry;
     protected String eventsQueue;
 
+    @Autowired
+    private net.java21.data2flow.pipeline.ingest.service.RawStreamConsumer consumer;
+
     @BeforeEach
     void resetState() {
+        awaitIdle();
         clock.set(MutableClock.T0);
         CORE.reset();
-        jdbc.sql("""
-                TRUNCATE data2flow_pipeline.raw_messages, data2flow_pipeline.dlq_items, data2flow_pipeline.telemetry,
-                    data2flow_pipeline.telemetry_1m, data2flow_pipeline.telemetry_1h, data2flow_pipeline.telemetry_1d,
-                    data2flow_pipeline.link_qualities, data2flow_pipeline.agg_watermarks, data2flow_pipeline.agg_dirty_ranges,
-                    data2flow_pipeline.device_state, data2flow_pipeline.data_gaps""").update();
+        org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(30)).ignoreExceptions().until(() -> {
+            truncate();
+            return true;
+        });
         if (!partitionsReady) {
             partitions.maintain();
             partitionsReady = true;
@@ -118,9 +121,26 @@ public abstract class IntegrationTestSupport {
         eventsQueue = queue.getName();
     }
 
+    private void truncate() {
+        jdbc.sql("""
+                TRUNCATE data2flow_pipeline.raw_messages, data2flow_pipeline.dlq_items, data2flow_pipeline.telemetry,
+                    data2flow_pipeline.telemetry_1m, data2flow_pipeline.telemetry_1h, data2flow_pipeline.telemetry_1d,
+                    data2flow_pipeline.link_qualities, data2flow_pipeline.agg_watermarks, data2flow_pipeline.agg_dirty_ranges,
+                    data2flow_pipeline.device_state, data2flow_pipeline.data_gaps""").update();
+    }
+
+    /** 앞 시험의 메시지 처리가 끝날 때까지(처리 중 0이 0.3초 이어짐) */
+    protected void awaitIdle() {
+        org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(60))
+                .during(java.time.Duration.ofMillis(300)).until(() -> consumer.inFlight() == 0);
+    }
+
     @AfterEach
     void closeCollectors() {
         receivedEvents.clear();
+        if (telemetry == null) {
+            return;
+        }
         telemetry.close();
         rabbitAdmin.deleteQueue(eventsQueue);
     }

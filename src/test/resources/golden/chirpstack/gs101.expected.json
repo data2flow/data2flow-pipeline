@@ -1,0 +1,36 @@
+{
+  "externalId": "24e124710a778899",
+  "measuredAt": "2026-10-03T02:43:00Z",
+  "values": [
+    {
+      "key": "alarm",
+      "value": "normal",
+      "unit": null
+    },
+    {
+      "key": "valve",
+      "value": "open",
+      "unit": null
+    },
+    {
+      "key": "relay",
+      "value": "close",
+      "unit": null
+    }
+  ],
+  "link": {
+    "rssi": -85,
+    "snr": 4.0,
+    "frameCounter": 45,
+    "gateways": [
+      {
+        "eui": "24e124fffef79304",
+        "rssi": -85,
+        "snr": 4.0
+      }
+    ]
+  },
+  "tags": {
+    "location": "주방"
+  }
+}

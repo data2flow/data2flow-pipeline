@@ -1,0 +1,32 @@
+{
+  "deduplicationId": "3f1e9b2a-0c4d-4e5f-8a6b-000000030551",
+  "time": "2026-10-03T02:40:09.123+00:00",
+  "deviceInfo": {
+    "applicationId": "6a1c5b0e-0000-4000-8000-000000000001",
+    "deviceName": "AM103-081175",
+    "deviceProfileName": "AM103",
+    "devEui": "24e124725d081175",
+    "tags": {
+      "location": "사무실",
+      "point": "업무 공간 안쪽"
+    }
+  },
+  "devAddr": "019c4863",
+  "fCnt": 30551,
+  "fPort": 85,
+  "data": "AQ==",
+  "rxInfo": [
+    {
+      "gatewayId": "24e124fffef79304",
+      "rssi": -98,
+      "snr": -1.5,
+      "nsTime": "2026-10-03T02:40:12.140Z"
+    }
+  ],
+  "object": {
+    "co2": 980,
+    "temperature": 23.4,
+    "humidity": 41.0,
+    "battery": 1
+  }
+}

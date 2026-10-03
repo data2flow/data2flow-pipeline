@@ -1,0 +1,33 @@
+{
+  "deduplicationId": "3f1e9b2a-0c4d-4e5f-8a6b-000000040211",
+  "time": "2026-10-03T02:40:09.123+00:00",
+  "deviceInfo": {
+    "applicationId": "6a1c5b0e-0000-4000-8000-000000000001",
+    "deviceName": "EM500-CO2-152590",
+    "deviceProfileName": "EM500-CO2",
+    "devEui": "24e124126d152590",
+    "tags": {
+      "location": "실습실",
+      "point": "전방 좌측"
+    }
+  },
+  "devAddr": "019c4863",
+  "fCnt": 40211,
+  "fPort": 85,
+  "data": "AQ==",
+  "rxInfo": [
+    {
+      "gatewayId": "24e124fffef79304",
+      "rssi": -80,
+      "snr": 6.5,
+      "nsTime": "2026-10-03T02:40:11.140Z"
+    }
+  ],
+  "object": {
+    "co2": 1180,
+    "pressure": 1004.2,
+    "temperature": 22.1,
+    "humidity": 45.5,
+    "battery": 100
+  }
+}

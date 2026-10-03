@@ -1,0 +1,47 @@
+{
+  "externalId": "24e124743d012436",
+  "measuredAt": "2026-10-03T02:40:09.140Z",
+  "values": [
+    {
+      "key": "battery",
+      "value": 55.0,
+      "unit": null
+    },
+    {
+      "key": "LAeq",
+      "value": 30.5,
+      "unit": null
+    },
+    {
+      "key": "LAI",
+      "value": 42.0,
+      "unit": null
+    },
+    {
+      "key": "LAImax",
+      "value": 42.0,
+      "unit": null
+    }
+  ],
+  "link": {
+    "rssi": -33,
+    "snr": 13.5,
+    "frameCounter": 23518,
+    "gateways": [
+      {
+        "eui": "24e124fffef79304",
+        "rssi": -33,
+        "snr": 13.5
+      },
+      {
+        "eui": "24e124fffef5dccc",
+        "rssi": -107,
+        "snr": -2.0
+      }
+    ]
+  },
+  "tags": {
+    "location": "실습실",
+    "point": "강단"
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "deduplicationId": "3f1e9b2a-0c4d-4e5f-8a6b-000000010212",
+  "time": "2026-10-03T02:40:09.123+00:00",
+  "deviceInfo": {
+    "applicationId": "6a1c5b0e-0000-4000-8000-000000000001",
+    "deviceName": "EM300-TH-151607",
+    "deviceProfileName": "EM300-TH",
+    "devEui": "24e124136d151607",
+    "tags": {
+      "location": "실습실"
+    }
+  },
+  "devAddr": "019c4863",
+  "fCnt": 10212,
+  "fPort": 85,
+  "data": "AQ==",
+  "rxInfo": [
+    {
+      "gatewayId": "24e124fffef79304",
+      "rssi": -90,
+      "snr": 2.5,
+      "nsTime": "2026-10-03T02:40:10.140Z"
+    }
+  ],
+  "object": {
+    "temperature": 21.0,
+    "humidity": 40.0,
+    "battery": 5
+  }
+}

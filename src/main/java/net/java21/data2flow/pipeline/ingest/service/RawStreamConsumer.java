@@ -228,6 +228,11 @@ public class RawStreamConsumer implements SmartLifecycle {
         return SmartLifecycle.DEFAULT_PHASE - 100;
     }
 
+    /** 처리 중인 메시지 수(종료·시험 대기용) */
+    public int inFlight() {
+        return inFlight.get();
+    }
+
     public boolean isConsuming() {
         return consumer != null;
     }

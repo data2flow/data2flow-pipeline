@@ -1,0 +1,36 @@
+{
+  "externalId": "24e124136c445566",
+  "measuredAt": "2026-10-03T02:42:00Z",
+  "values": [
+    {
+      "key": "temperature",
+      "value": 20.5,
+      "unit": null
+    },
+    {
+      "key": "humidity",
+      "value": 38.0,
+      "unit": null
+    },
+    {
+      "key": "magnet_status",
+      "value": "close",
+      "unit": null
+    }
+  ],
+  "link": {
+    "rssi": -77,
+    "snr": 7.0,
+    "frameCounter": 120,
+    "gateways": [
+      {
+        "eui": "24e124fffef79304",
+        "rssi": -77,
+        "snr": 7.0
+      }
+    ]
+  },
+  "tags": {
+    "location": "창고"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "externalId": "24e124136d151607",
+  "measuredAt": "2026-10-03T02:40:10.140Z",
+  "values": [
+    {
+      "key": "temperature",
+      "value": 21.0,
+      "unit": null
+    },
+    {
+      "key": "humidity",
+      "value": 40.0,
+      "unit": null
+    },
+    {
+      "key": "battery",
+      "value": 5,
+      "unit": null
+    }
+  ],
+  "link": {
+    "rssi": -90,
+    "snr": 2.5,
+    "frameCounter": 10212,
+    "gateways": [
+      {
+        "eui": "24e124fffef79304",
+        "rssi": -90,
+        "snr": 2.5
+      }
+    ]
+  },
+  "tags": {
+    "location": "실습실"
+  }
+}

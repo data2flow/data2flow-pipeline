@@ -1,0 +1,31 @@
+{
+  "deduplicationId": "3f1e9b2a-0c4d-4e5f-8a6b-000000000801",
+  "time": "2026-10-03T02:40:09.123+00:00",
+  "deviceInfo": {
+    "applicationId": "6a1c5b0e-0000-4000-8000-000000000001",
+    "deviceName": "WS301-223344",
+    "deviceProfileName": "WS301",
+    "devEui": "24e124538b223344",
+    "tags": {
+      "location": "실습실",
+      "point": "출입문"
+    }
+  },
+  "devAddr": "019c4863",
+  "fCnt": 801,
+  "fPort": 85,
+  "data": "AQ==",
+  "rxInfo": [
+    {
+      "gatewayId": "24e124fffef79304",
+      "rssi": -60,
+      "snr": 11.0,
+      "nsTime": "2026-10-03T02:41:00.000Z"
+    }
+  ],
+  "object": {
+    "battery": 91,
+    "magnet_status": "open",
+    "install_status": "yes"
+  }
+}

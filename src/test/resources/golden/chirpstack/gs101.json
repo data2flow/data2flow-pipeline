@@ -1,0 +1,30 @@
+{
+  "deduplicationId": "3f1e9b2a-0c4d-4e5f-8a6b-000000000045",
+  "time": "2026-10-03T02:40:09.123+00:00",
+  "deviceInfo": {
+    "applicationId": "6a1c5b0e-0000-4000-8000-000000000001",
+    "deviceName": "GS101-778899",
+    "deviceProfileName": "GS101",
+    "devEui": "24e124710a778899",
+    "tags": {
+      "location": "주방"
+    }
+  },
+  "devAddr": "019c4863",
+  "fCnt": 45,
+  "fPort": 85,
+  "data": "AQ==",
+  "rxInfo": [
+    {
+      "gatewayId": "24e124fffef79304",
+      "rssi": -85,
+      "snr": 4.0,
+      "nsTime": "2026-10-03T02:43:00.000Z"
+    }
+  ],
+  "object": {
+    "alarm": "normal",
+    "valve": "open",
+    "relay": "close"
+  }
+}

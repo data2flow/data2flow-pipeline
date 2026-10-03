@@ -1,0 +1,47 @@
+{
+  "externalId": "24e124126d152590",
+  "measuredAt": "2026-10-03T02:40:11.140Z",
+  "values": [
+    {
+      "key": "co2",
+      "value": 1180,
+      "unit": null
+    },
+    {
+      "key": "pressure",
+      "value": 1004.2,
+      "unit": null
+    },
+    {
+      "key": "temperature",
+      "value": 22.1,
+      "unit": null
+    },
+    {
+      "key": "humidity",
+      "value": 45.5,
+      "unit": null
+    },
+    {
+      "key": "battery",
+      "value": 100,
+      "unit": null
+    }
+  ],
+  "link": {
+    "rssi": -80,
+    "snr": 6.5,
+    "frameCounter": 40211,
+    "gateways": [
+      {
+        "eui": "24e124fffef79304",
+        "rssi": -80,
+        "snr": 6.5
+      }
+    ]
+  },
+  "tags": {
+    "location": "실습실",
+    "point": "전방 좌측"
+  }
+}
