@@ -1,4 +1,12 @@
-# 로컬 개발. 인프라는 s3 SSH 터널·공용 개발 DB로 붙는다(design/deployment.md §8.2). 비밀값은 루트 .env
+# 로컬 개발. 인프라는 s3 SSH 터널·공용 개발 DB로 붙는다(design/deployment.md §8.2). 비밀값은 루트 .env를 셸에 읽어 둔다
+# (set -a; source ../.env; set +a). vhost data2flow-dev, 소비자 그룹 pipeline-<DATA2FLOW_DEV_NAME>.
+# 공용 DB이므로 Flyway는 validate만 하고(ADR-030), 파티션·집계·오프라인 판정 같은 공유 스케줄 작업은 끈다(운영 인스턴스가 한다).
 logging:
   level:
     net.java21.data2flow: DEBUG
+data2flow:
+  pipeline:
+    flyway-mode: validate
+    jobs-enabled: false
+    core:
+      base-url: ${DATA2FLOW_CORE_URI:http://localhost:8082}

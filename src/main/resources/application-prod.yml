@@ -1,5 +1,13 @@
-# prod: JSON 로그(요청 ID는 MDC requestId), 비밀값은 k8s Secret 환경변수
+# prod: JSON 로그(요청 ID는 MDC requestId), 비밀값은 k8s Secret 환경변수. Flyway는 validate만(ADR-030)
 logging:
   structured:
     format:
       console: ecs
+    json:
+      customizer: net.java21.data2flow.contracts.secret.SecretMaskingJsonMembersCustomizer
+spring:
+  datasource:
+    url: jdbc:postgresql://${DATA2FLOW_DB_HOST_INTERNAL}:${DATA2FLOW_DB_PORT}/${DATA2FLOW_DB_NAME}?ApplicationName=data2flow-pipeline&socketTimeout=30&connectTimeout=5
+data2flow:
+  pipeline:
+    flyway-mode: validate
