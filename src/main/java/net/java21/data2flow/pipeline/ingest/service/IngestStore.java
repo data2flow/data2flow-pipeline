@@ -218,12 +218,18 @@ public class IngestStore {
             d.trace.put("attempts", attempts);
         }
         return new RawMessageRow(rawId, d.envelope.organizationId(), d.envelope.sourceId(),
-                d.device == null ? null : d.device.deviceId(), d.envelope.messageId(), d.envelope.sourceType(),
+                d.device == null ? null : d.device.deviceId(), d.envelope.messageId(), storedSourceType(d.envelope.sourceType()),
                 d.envelope.topic(), payload, PayloadEncoding.detect(payload).name(), d.envelope.ingressInstance(),
                 d.dedupKey, d.partition, d.offset, d.externalId, d.status, d.errorCode,
                 d.errorDetail == null ? null : mapper.writeValueAsString(d.errorDetail),
                 mapper.writeValueAsString(d.trace.root()), d.status == RawMessageStatus.OK ? d.metrics.size() : null,
                 d.dropped, d.envelope.virtual(), d.envelope.receivedAt(), now);
+    }
+
+    /** raw_messages.source_type은 계약 SourceTypes 값만 받는다. 모르는 값(더 새 생산자)은 CONNECTOR로 두고 원래 값은 error_detail에 */
+    static String storedSourceType(String sourceType) {
+        return net.java21.data2flow.contracts.message.SourceTypes.KNOWN.contains(sourceType) ? sourceType
+                : net.java21.data2flow.contracts.message.SourceTypes.CONNECTOR;
     }
 
     /**

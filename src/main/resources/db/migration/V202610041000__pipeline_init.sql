@@ -16,7 +16,7 @@ CREATE TABLE raw_messages (
     source_id         bigint       NOT NULL,
     device_id         bigint,
     message_id        uuid         NOT NULL,
-    source_type       varchar(32)  NOT NULL,
+    source_type       varchar(16)  NOT NULL,
     topic             varchar(512),
     payload           bytea        NOT NULL,
     payload_encoding  varchar(8)   NOT NULL,
@@ -35,8 +35,9 @@ CREATE TABLE raw_messages (
     received_at       timestamptz  NOT NULL,
     processed_at      timestamptz,
     CONSTRAINT pk_raw_messages PRIMARY KEY (id, received_at),
-    -- RawEnvelope.sourceType(= DSC data_sources.type, SourceTypes) 값을 그대로 둔다. 새 소스 유형도 받도록 형식만 검사
-    CONSTRAINT ck_raw_messages_source_type CHECK (source_type ~ '^[A-Z][A-Z0-9_]{1,31}$'),
+    -- RawEnvelope.sourceType = DSC data_sources.type(계약 SourceTypes 13종이 정본). 모르는 값은 pipeline이 INVALID로 남긴다
+    CONSTRAINT ck_raw_messages_source_type CHECK (source_type IN ('MQTT_SUBSCRIBE','PLATFORM_BROKER','WEBHOOK','SIMULATION',
+        'CONNECTOR','EDGE','KMA_WEATHER','AIRKOREA','HOLIDAY','ICAL','ONEM2M','OPCUA','MODBUS_TCP')),
     CONSTRAINT ck_raw_messages_payload_encoding CHECK (payload_encoding IN ('JSON','TEXT','BINARY')),
     CONSTRAINT ck_raw_messages_payload_size CHECK (octet_length(payload) <= 262144),
     CONSTRAINT ck_raw_messages_stream_partition CHECK (stream_partition BETWEEN -1 AND 255),

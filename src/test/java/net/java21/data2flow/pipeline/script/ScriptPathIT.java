@@ -215,7 +215,7 @@ class ScriptPathIT extends IntegrationTestSupport {
                 ConfigChangedMessage.upsert(ConfigChangedMessage.EntityType.SCRIPT, 8, 2, 1, clock)));
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() ->
-                assertThat(CORE.deployAcks()).anySatisfy(a -> assertThat(a.get("versionId").asLong()).isEqualTo(81)));
+                assertThat(CORE.deployAcks()).anySatisfy(a -> assertThat(a.get("versionId").asString()).isEqualTo("81")));
         publish(chirp("24e1240000000107", 9, "{\"temperature\":20}"));
         CanonicalTelemetry t = awaitTelemetry(2);
         assertThat(t.metric("temperature").value()).isEqualTo(2);

@@ -79,6 +79,34 @@ public class TelemetryRepository {
         });
     }
 
+    /**
+     * 별칭 키 행을 표준 키로 옮긴다(API-TSD-51). 같은 키·시각이 이미 있으면 기존 값을 두고, 바뀐 (기기, 키, 분)을 REMAP 재계산 구간으로 남긴다.
+     *
+     * @return 옮긴 행 수
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public int remapMetric(long organizationId, String alias, String targetKey, Instant from, Instant to) {
+        Timestamp f = Timestamp.from(from == null ? Instant.EPOCH : from);
+        Timestamp t = Timestamp.from(to == null ? Instant.parse("9999-01-01T00:00:00Z") : to);
+        jdbc.update("""
+                INSERT INTO data2flow_pipeline.agg_dirty_ranges (organization_id, level, device_id, metric_key, from_ts, to_ts, reason)
+                SELECT DISTINCT organization_id, '1m', device_id, k, date_trunc('minute', time),
+                       date_trunc('minute', time) + interval '1 minute', 'REMAP'
+                  FROM data2flow_pipeline.telemetry, unnest(ARRAY[?, ?]) AS k
+                 WHERE organization_id = ? AND metric_key = ? AND time >= ? AND time < ?""",
+                alias, targetKey, organizationId, alias, f, t);
+        int moved = jdbc.update("""
+                INSERT INTO data2flow_pipeline.telemetry (device_id, metric_key, time, organization_id, value, quality, flags,
+                    is_virtual, received_at, raw_message_id)
+                SELECT device_id, ?, time, organization_id, value, quality, flags | 4, is_virtual, received_at, raw_message_id
+                  FROM data2flow_pipeline.telemetry
+                 WHERE organization_id = ? AND metric_key = ? AND time >= ? AND time < ?
+                ON CONFLICT (device_id, metric_key, time) DO NOTHING""", targetKey, organizationId, alias, f, t);
+        jdbc.update("DELETE FROM data2flow_pipeline.telemetry WHERE organization_id = ? AND metric_key = ? AND time >= ? AND time < ?",
+                organizationId, alias, f, t);
+        return moved;
+    }
+
     /** 집계 워터마크(이 시각까지 정상 갱신 완료). 없으면 null */
     public Instant currentWatermark(String level) {
         return jdbc.query("SELECT processed_until FROM data2flow_pipeline.agg_watermarks WHERE level = ?",

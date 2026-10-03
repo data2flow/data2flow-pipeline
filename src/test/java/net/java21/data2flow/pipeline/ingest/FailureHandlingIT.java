@@ -144,4 +144,71 @@ class FailureHandlingIT extends IntegrationTestSupport {
         assertThat(count("SELECT count(*) FROM data2flow_pipeline.dlq_items")).isEqualTo(1);
         assertThat(count("SELECT count(*) FROM data2flow_pipeline.raw_messages")).isEqualTo(2);
     }
+
+    @Test
+    @DisplayName("[ING-01.04][AT-ING-08.2] API-ING-23 기간 재처리 작업: 202 QUEUED → COMPLETED, 실패 원본만 다시 처리, 409·400 규칙, 취소")
+    void reprocessJobs() throws Exception {
+        failingMessages(3);
+        CORE.sourceDecoderConfig(8, CODEC.mapper().readTree(
+                "{\"deviceIdFrom\":\"$.id\",\"timeFrom\":\"$.ts\",\"metrics\":[{\"path\":\"$.temp\",\"key\":\"temperature\"}]}"));
+        rabbit.convertAndSend("data2flow.config", "", CODEC.write(net.java21.data2flow.contracts.message.ConfigChangedMessage
+                .upsert(net.java21.data2flow.contracts.message.ConfigChangedMessage.EntityType.SOURCE, 8, 3, 1, clock)));
+        await().atMost(Duration.ofSeconds(5)).until(() -> CORE.callCount("GET /internal/core/ingest-context") >= 1);
+        String body = "{\"organizationId\":1,\"requestedBy\":7,\"sourceId\":8,\"from\":\"2026-10-02T23:00:00Z\","
+                + "\"to\":\"2026-10-03T01:00:00Z\",\"onlyFailed\":true,\"memo\":\"매핑 수정 후\"}";
+
+        JsonNode created = await().atMost(Duration.ofSeconds(10)).until(() -> {
+            JsonNode r = post("/internal/pipeline/reprocess-jobs", body, 202).get("response");
+            long id = r.get("jobId").asLong();
+            await().atMost(Duration.ofSeconds(30)).until(() -> List.of("COMPLETED", "FAILED").contains(jdbc.sql(
+                    "SELECT status FROM data2flow_pipeline.reprocess_jobs WHERE id = :id").param("id", id).query(String.class).single()));
+            return r;
+        }, r -> count("SELECT count(*) FROM data2flow_pipeline.raw_messages WHERE status = 'OK'") == 3);
+
+        assertThat(created.get("status").asString()).isEqualTo("QUEUED");
+        assertThat(created.get("estimatedCount").asLong()).isPositive();
+        assertThat(count("SELECT count(*) FROM data2flow_pipeline.telemetry")).isEqualTo(3);
+        jdbc.sql("""
+                INSERT INTO data2flow_pipeline.reprocess_jobs (organization_id, source_id, period_from, period_to, status,
+                    decoder_version, requested_by) VALUES (1, 99, now() - interval '1 hour', now(), 'RUNNING', 'x', 7)""").update();
+        long running = jdbc.sql("SELECT id FROM data2flow_pipeline.reprocess_jobs WHERE source_id = 99").query(Long.class).single();
+        assertThat(post("/internal/pipeline/reprocess-jobs", body.replace("\"sourceId\":8", "\"sourceId\":99"), 409)
+                .get("header").get("resultCode").asString()).isEqualTo("ING_REPROCESS_ALREADY_RUNNING");
+        assertThat(post("/internal/pipeline/reprocess-jobs", body.replace("2026-10-02T23:00:00Z", "2026-08-01T00:00:00Z"), 400)
+                .get("header").get("resultCode").asString()).isIn("ING_REPROCESS_OUT_OF_RETENTION", "ING_QUERY_RANGE_TOO_LARGE");
+        assertThat(post("/internal/pipeline/reprocess-jobs", body.replace("2026-10-02T23:00:00Z", "2026-08-25T00:00:00Z")
+                .replace("2026-10-03T01:00:00Z", "2026-09-20T00:00:00Z"), 400)
+                .get("header").get("resultCode").asString()).isEqualTo("ING_REPROCESS_OUT_OF_RETENTION");
+        assertThat(post("/internal/pipeline/reprocess-jobs/" + running + "/cancel", "{\"organizationId\":1,\"requestedBy\":7}", 200)
+                .get("response").get("status").asString()).isEqualTo("CANCELLING");
+        assertThat(post("/internal/pipeline/reprocess-jobs/" + running + "/cancel", "{\"organizationId\":1,\"requestedBy\":7}", 409)
+                .get("header").get("resultCode").asString()).isEqualTo("ING_REPROCESS_NOT_CANCELLABLE");
+        post("/internal/pipeline/reprocess-jobs/123456/cancel", "{\"organizationId\":1,\"requestedBy\":7}", 404);
+        jdbc.sql("DELETE FROM data2flow_pipeline.reprocess_jobs").update();
+    }
+
+    @Test
+    @DisplayName("[DEV-04.03][AT-DEV-04.3] API-TSD-51 별칭 재매핑: illuminance 행을 illumination으로 옮기고(겹치면 기존 값 유지) REMAP 재계산 구간을 남긴다")
+    void remapMetric() throws Exception {
+        for (int i = 0; i < 3; i++) {
+            jdbc.sql("""
+                    INSERT INTO data2flow_pipeline.telemetry (device_id, metric_key, time, organization_id, value, received_at)
+                    VALUES (5, 'illuminance', :t, 1, :v, :t)""")
+                    .param("t", java.sql.Timestamp.from(clock.instant().plusSeconds(60L * i))).param("v", 100 + i).update();
+        }
+        jdbc.sql("""
+                INSERT INTO data2flow_pipeline.telemetry (device_id, metric_key, time, organization_id, value, received_at)
+                VALUES (5, 'illumination', :t, 1, 999, :t)""").param("t", java.sql.Timestamp.from(clock.instant())).update();
+
+        JsonNode response = post("/internal/pipeline/telemetry/remap-metric",
+                "{\"organizationId\":1,\"alias\":\"illuminance\",\"targetKey\":\"illumination\"}", 202).get("response");
+
+        assertThat(response.get("jobId").asString()).isNotBlank();
+        await().atMost(Duration.ofSeconds(10)).until(() ->
+                count("SELECT count(*) FROM data2flow_pipeline.telemetry WHERE metric_key = 'illuminance'") == 0);
+        assertThat(count("SELECT count(*) FROM data2flow_pipeline.telemetry WHERE metric_key = 'illumination'")).isEqualTo(3);
+        assertThat(count("SELECT count(*) FROM data2flow_pipeline.telemetry WHERE metric_key = 'illumination' AND value = 999"))
+                .isEqualTo(1);
+        assertThat(count("SELECT count(*) FROM data2flow_pipeline.agg_dirty_ranges WHERE reason = 'REMAP'")).isEqualTo(6);
+    }
 }

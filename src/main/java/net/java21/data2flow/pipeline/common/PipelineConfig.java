@@ -204,6 +204,19 @@ public class PipelineConfig {
         return new FailureService(dlq, raws, processor, clock);
     }
 
+    @Bean(destroyMethod = "close")
+    net.java21.data2flow.pipeline.ingest.service.ReprocessJobService reprocessJobService(
+            net.java21.data2flow.pipeline.ingest.repository.ReprocessJobRepository jobs, RawMessageRepository raws,
+            IngestProcessor processor, SourceContextCache sources, PipelineProperties properties, Clock clock) {
+        return new net.java21.data2flow.pipeline.ingest.service.ReprocessJobService(jobs, raws, processor, sources, properties, clock);
+    }
+
+    @Bean(destroyMethod = "close")
+    net.java21.data2flow.pipeline.telemetry.service.MetricRemapService metricRemapService(TelemetryRepository telemetry,
+                                                                                         Clock clock) {
+        return new net.java21.data2flow.pipeline.telemetry.service.MetricRemapService(telemetry, clock);
+    }
+
     // ---- RabbitMQ Stream ----
 
     @Bean(destroyMethod = "close")

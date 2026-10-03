@@ -120,12 +120,13 @@ public final class CoreApiStub {
 
     public ObjectNode source(long sourceId, long organizationId, String decoderKey, String policy, Long scriptId) {
         ObjectNode s = mapper.createObjectNode();
-        s.put("sourceId", sourceId);
-        s.put("organizationId", organizationId);
+        s.put("sourceId", Long.toString(sourceId));
+        s.put("organizationId", Long.toString(organizationId));
+        s.put("sourceType", "MQTT_SUBSCRIBE");
         ObjectNode decoder = s.putObject("decoder");
         decoder.put("key", decoderKey);
         if (scriptId != null) {
-            decoder.put("scriptId", scriptId);
+            decoder.put("scriptId", Long.toString(scriptId));
         }
         decoder.putObject("config");
         s.put("unknownDevicePolicy", policy);
@@ -148,17 +149,17 @@ public final class CoreApiStub {
     public ObjectNode device(long deviceId, long organizationId, long sourceId, String externalId, String status, Long modelId,
                              Long spaceId, Integer intervalSec) {
         ObjectNode d = mapper.createObjectNode();
-        d.put("deviceId", deviceId);
-        d.put("organizationId", organizationId);
-        d.put("sourceId", sourceId);
+        d.put("deviceId", Long.toString(deviceId));
+        d.put("organizationId", Long.toString(organizationId));
+        d.put("sourceId", Long.toString(sourceId));
         d.put("externalId", externalId.toLowerCase());
         d.put("name", "device-" + deviceId);
         d.put("status", status);
         if (modelId != null) {
-            d.put("modelId", modelId);
+            d.put("modelId", Long.toString(modelId));
         }
         if (spaceId != null) {
-            d.put("spaceId", spaceId);
+            d.put("spaceId", Long.toString(spaceId));
         }
         if (intervalSec != null) {
             d.put("expectedIntervalSec", intervalSec);
@@ -176,7 +177,7 @@ public final class CoreApiStub {
 
     public ObjectNode metric(String key, String unit, Double min, Double max) {
         ObjectNode m = mapper.createObjectNode();
-        m.put("id", metrics.size() + 1);
+        m.put("id", Integer.toString(metrics.size() + 1));
         m.put("key", key);
         if (unit != null) {
             m.put("unit", unit);
@@ -210,23 +211,23 @@ public final class CoreApiStub {
         });
         ArrayNode scripts = (ArrayNode) bundle.get("scripts");
         for (int i = 0; i < scripts.size(); i++) {
-            if (scripts.get(i).get("scriptId").asLong() == scriptId) {
+            if (scripts.get(i).get("scriptId").asString().equals(Long.toString(scriptId))) {
                 scripts.remove(i);
                 break;
             }
         }
         ObjectNode s = scripts.addObject();
-        s.put("scriptId", scriptId);
+        s.put("scriptId", Long.toString(scriptId));
+        s.put("organizationId", Long.toString(organizationId));
         s.put("kind", kind);
-        s.put("versionId", versionId);
+        s.put("versionId", Long.toString(versionId));
         s.put("versionNo", versionNo);
         s.put("code", code);
         s.set("config", config == null ? mapper.createObjectNode() : config);
-        s.put("failurePolicy", failurePolicy);
-        s.put("status", "ENABLED");
         ObjectNode binding = s.putArray("bindings").addObject();
         binding.put("targetType", targetType);
-        binding.put("targetId", targetId);
+        binding.put("targetId", Long.toString(targetId));
+        binding.put("failurePolicy", failurePolicy);
         binding.put("enabled", true);
         bundle.put("bundleVersion", bundle.get("bundleVersion").asLong() + 1);
     }
@@ -332,7 +333,7 @@ public final class CoreApiStub {
                     if (!metrics.containsKey(key)) {
                         ObjectNode m = metric(key, null, null, null);
                         m.put("status", "UNVERIFIED");
-                        registered.addObject().put("key", key).put("metricId", m.get("id").asLong())
+                        registered.addObject().put("key", key).put("metricId", m.get("id").asString())
                                 .put("status", "UNVERIFIED");
                     }
                 }
@@ -372,7 +373,7 @@ public final class CoreApiStub {
         ObjectNode existing = devices.get(sourceId + "|" + ext);
         if (existing != null) {
             ObjectNode r = mapper.createObjectNode();
-            r.put("deviceId", existing.get("deviceId").asLong());
+            r.put("deviceId", existing.get("deviceId").asString());
             r.put("status", existing.get("status").asString());
             r.put("created", false);
             send(exchange, 200, ok(r));
@@ -395,7 +396,7 @@ public final class CoreApiStub {
             d.put("name", req.get("name").asString());
         }
         ObjectNode r = mapper.createObjectNode();
-        r.put("deviceId", id);
+        r.put("deviceId", Long.toString(id));
         r.put("status", "PENDING");
         r.put("created", true);
         send(exchange, 200, ok(r));

@@ -80,16 +80,16 @@ public class CoreApiClient implements CoreDirectory {
         }
         JsonNode config = decoder.has("config") ? decoder.get("config") : body.path("decoderConfig");
         return Optional.of(new SourceContext(
-                body.path("sourceId").asLong(sourceId),
-                body.path("organizationId").asLong(),
+                lng(body, "sourceId", sourceId),
+                lng(body, "organizationId", 0),
                 key == null ? "chirpstack-v4" : key,
                 scriptId,
                 config.isMissingNode() || config.isNull() ? mapper.createObjectNode() : config,
                 UnknownDevicePolicy.parse(text(body, "unknownDevicePolicy")),
-                body.path("autoRegisterHourlyLimit").asInt(body.path("autoregLimitPerHour").asInt(100)),
+                (int) lng(body, "autoRegisterHourlyLimit", lng(body, "autoregLimitPerHour", 100)),
                 longOrNull(body, "defaultModelId"),
                 longOrNull(body, "defaultSpaceId"),
-                body.path("contextVersion").asLong(0)));
+                lng(body, "contextVersion", 0)));
     }
 
     @Override
@@ -111,9 +111,6 @@ public class CoreApiClient implements CoreDirectory {
             body.put("name", command.name());
         }
         body.set("sourceMeta", command.sourceMeta() == null ? mapper.createObjectNode() : command.sourceMeta());
-        if (command.sourceMeta() != null && command.sourceMeta().has("tags")) {
-            body.set("tags", command.sourceMeta().get("tags"));
-        }
         body.put("firstSeenAt", command.firstSeenAt().toString());
         ArrayNode metrics = body.putArray("metrics");
         command.metricKeys().forEach(metrics::add);
@@ -132,7 +129,7 @@ public class CoreApiClient implements CoreDirectory {
             return new AutoRegisterResult(null, false,
                     quota ? AutoRegisterResult.Outcome.QUOTA_EXCEEDED : AutoRegisterResult.Outcome.REJECTED);
         }
-        return new AutoRegisterResult(response.path("deviceId").asLong(), response.path("created").asBoolean(false),
+        return new AutoRegisterResult(lng(response, "deviceId", 0), response.path("created").asBoolean(false),
                 AutoRegisterResult.Outcome.REGISTERED);
     }
 
@@ -157,9 +154,9 @@ public class CoreApiClient implements CoreDirectory {
         List<DeviceInfo> devices = new ArrayList<>();
         JsonNode list = r.body.path("responses");
         for (JsonNode d : list) {
-            devices.add(device(d, d.path("sourceId").asLong(), text(d, "externalId")));
+            devices.add(device(d, lng(d, "sourceId", 0), text(d, "externalId")));
         }
-        return new DevicePage(devices, r.body.path("page").asInt(page), r.body.path("totalPages").asInt(page));
+        return new DevicePage(devices, (int) lng(r.body, "page", page), (int) lng(r.body, "totalPages", page));
     }
 
     @Override
@@ -178,7 +175,7 @@ public class CoreApiClient implements CoreDirectory {
             m.path("enumMap").properties().forEach(e -> enumMap.put(e.getKey().toLowerCase(), e.getValue().asDouble()));
             String key = text(m, "key");
             if (key != null) {
-                metrics.put(key, new MetricDefinition(m.path("id").asLong(), key, text(m, "unit"), text(m, "valueType"),
+                metrics.put(key, new MetricDefinition(lng(m, "id", 0), key, text(m, "unit"), text(m, "valueType"),
                         doubleOrNull(m, "validMin"), doubleOrNull(m, "validMax"),
                         m.hasNonNull("status") ? m.get("status").asString() : "VERIFIED", enumMap,
                         m.path("stateType").asBoolean(false)));
@@ -193,7 +190,7 @@ public class CoreApiClient implements CoreDirectory {
                 aliases.put(text(a, "alias"), text(a, "key") != null ? text(a, "key") : text(a, "metricKey"));
             }
         }
-        return Optional.of(new MetricCatalog(body.path("version").asLong(0), metrics, aliases));
+        return Optional.of(new MetricCatalog(lng(body, "version", 0), metrics, aliases));
     }
 
     @Override
@@ -225,7 +222,6 @@ public class CoreApiClient implements CoreDirectory {
         ArrayNode list = body.putArray("items");
         for (GatewayTouch t : items) {
             ObjectNode item = list.addObject();
-            item.put("organizationId", t.organizationId());
             item.put("sourceId", t.sourceId());
             item.put("gatewayEui", t.gatewayEui());
             item.put("seenAt", t.seenAt().toString());
@@ -245,35 +241,35 @@ public class CoreApiClient implements CoreDirectory {
         for (JsonNode s : body.path("scripts")) {
             List<RuntimeBundle.Binding> bindings = new ArrayList<>();
             for (JsonNode b : s.path("bindings")) {
-                bindings.add(new RuntimeBundle.Binding(text(b, "targetType"), b.path("targetId").asLong(),
+                bindings.add(new RuntimeBundle.Binding(text(b, "targetType"), lng(b, "targetId", 0),
                         b.path("enabled").asBoolean(true),
                         b.hasNonNull("failurePolicy") ? FailurePolicy.parse(b.get("failurePolicy").asString()) : null));
             }
             String status = text(s, "status");
-            scripts.add(new RuntimeBundle.Script(s.path("scriptId").asLong(),
+            scripts.add(new RuntimeBundle.Script(lng(s, "scriptId", 0),
                     "DECODE".equalsIgnoreCase(text(s, "kind")) ? ScriptKind.DECODE : ScriptKind.TRANSFORM,
-                    s.path("versionId").asLong(), s.path("versionNo").asInt(), text(s, "code"),
+                    lng(s, "versionId", 0), (int) lng(s, "versionNo", 0), text(s, "code"),
                     s.path("config").isObject() ? s.get("config") : mapper.createObjectNode(),
                     FailurePolicy.parse(text(s, "failurePolicy")),
                     status == null || "ENABLED".equalsIgnoreCase(status), bindings));
         }
-        return new RuntimeBundle(body.path("bundleVersion").asLong(0), scripts);
+        return new RuntimeBundle(lng(body, "bundleVersion", 0), scripts);
     }
 
     @Override
     public void deployAck(String instance, long scriptId, long versionId, Instant appliedAt) {
         ObjectNode body = mapper.createObjectNode();
         body.put("instance", instance);
-        body.put("scriptId", scriptId);
-        body.put("versionId", versionId);
+        body.put("scriptId", Long.toString(scriptId));
+        body.put("versionId", Long.toString(versionId));
         body.put("appliedAt", appliedAt.toString());
         post("/internal/core/scripts/deploy-acks", body).requireSuccess();
     }
 
     private DeviceInfo device(JsonNode d, long sourceId, String externalId) {
         JsonNode model = d.path("model");
-        return new DeviceInfo(d.path("deviceId").asLong(d.path("id").asLong()), d.path("organizationId").asLong(),
-                d.path("sourceId").asLong(sourceId),
+        return new DeviceInfo(lng(d, "deviceId", lng(d, "id", 0)), lng(d, "organizationId", 0),
+                lng(d, "sourceId", sourceId),
                 text(d, "externalId") != null ? text(d, "externalId") : externalId,
                 text(d, "name"), text(d, "status") == null ? "ACTIVE" : text(d, "status"),
                 longOrNull(d, "modelId"), text(d, "modelCode") != null ? text(d, "modelCode") : text(model, "code"),
@@ -345,6 +341,12 @@ public class CoreApiClient implements CoreDirectory {
         } catch (NumberFormatException e) {
             return null;
         }
+    }
+
+    /** 숫자 또는 숫자 글자(core는 ID를 JSON 문자열로 준다, api-rules) */
+    private static long lng(JsonNode node, String field, long defaultValue) {
+        Long v = longOrNull(node, field);
+        return v == null ? defaultValue : v;
     }
 
     private static Integer intOrNull(JsonNode node, String field) {

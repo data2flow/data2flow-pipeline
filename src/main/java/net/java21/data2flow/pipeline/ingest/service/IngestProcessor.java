@@ -200,6 +200,11 @@ public class IngestProcessor {
 
     private void stages(MessageDraft d) {
         RawEnvelope env = d.envelope;
+        if (!SourceTypes.KNOWN.contains(env.sourceType())) {
+            d.fail(RawMessageStatus.INVALID, "ING_SOURCE_TYPE_UNKNOWN", "모르는 소스 유형입니다: " + env.sourceType(), mapper);
+            d.errorDetail.put("sourceType", env.sourceType());
+            return;
+        }
         // ① 원본 크기(BR-ING-10)
         if (env.payload().length > properties.ingest().maxPayloadBytes()) {
             d.fail(RawMessageStatus.INVALID, MessageLimitValidator.PAYLOAD_EXCEEDED,
