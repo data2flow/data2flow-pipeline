@@ -226,8 +226,14 @@
                     <excludes><exclude>**/*Application.class</exclude></excludes>
                 </configuration>
                 <executions>
-                    <execution><id>prepare</id><goals><goal>prepare-agent</goal></goals></execution>
-                    <execution><id>prepare-it</id><goals><goal>prepare-agent-integration</goal></goals></execution>
+                    <!-- 에이전트는 GraalJS·Truffle(제3자, 보고서 대상 아님)을 계측하지 않는다. 계측하면 해석 실행 경로가 2배쯤 느려져
+                         스크립트 CPU 50ms 한도 시험이 운영과 다른 조건에서 돈다(SCR-02.02) -->
+                    <execution><id>prepare</id><goals><goal>prepare-agent</goal></goals>
+                        <configuration><excludes><exclude>com.oracle.*</exclude><exclude>org.graalvm.*</exclude></excludes></configuration>
+                    </execution>
+                    <execution><id>prepare-it</id><goals><goal>prepare-agent-integration</goal></goals>
+                        <configuration><excludes><exclude>com.oracle.*</exclude><exclude>org.graalvm.*</exclude></excludes></configuration>
+                    </execution>
                     <execution>
                         <id>merge</id><phase>post-integration-test</phase><goals><goal>merge</goal></goals>
                         <configuration>

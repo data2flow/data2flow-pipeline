@@ -19,8 +19,6 @@ data2flow:
     stream:
       partitions: 3
       publish-timeout: 5s
-    script:
-      warm-up-rounds: 3
     ingest:
       retry-initial: 100ms
       retry-max: 2s

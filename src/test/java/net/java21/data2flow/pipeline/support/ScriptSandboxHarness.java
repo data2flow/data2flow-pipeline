@@ -33,7 +33,7 @@ public final class ScriptSandboxHarness {
     private static final ScriptSandbox SANDBOX = new ScriptSandbox(properties().script().toLimits());
 
     static {
-        SANDBOX.warmUp(properties().script().warmUpRounds());
+        SANDBOX.warmUp(properties().script().toWarmUpPolicy());
     }
 
     private ScriptSandboxHarness() {

@@ -49,6 +49,11 @@ class ScriptPathIT extends IntegrationTestSupport {
         return telemetry.telemetry().get(count - 1);
     }
 
+    private String errorDetail(UUID messageId) {
+        return jdbc.sql("SELECT error_detail::text FROM data2flow_pipeline.raw_messages WHERE message_id = :id")
+                .param("id", messageId).query(String.class).optional().orElse(null);
+    }
+
     private JsonNode trace(UUID messageId) {
         return CODEC.mapper().readTree(jdbc.sql("SELECT processing_trace::text FROM data2flow_pipeline.raw_messages WHERE message_id = :id")
                 .param("id", messageId).query(String.class).single());
@@ -72,6 +77,10 @@ class ScriptPathIT extends IntegrationTestSupport {
         RawEnvelope envelope = envelope(9, "WEBHOOK", "milesight/byte-01/up", payload, clock.instant());
 
         publish(envelope);
+        awaitRaw(envelope.messageId());
+        // 처리 결과를 먼저 본다: 실패(예: SCRIPT_TIMEOUT → DECODE_ERROR)면 표준 메시지를 30초 기다리지 않고 원인과 함께 바로 실패
+        assertThat(rawStatus(envelope.messageId())).as("raw_messages.error_detail=%s", errorDetail(envelope.messageId()))
+                .isEqualTo("OK");
         CanonicalTelemetry t = awaitTelemetry(1);
 
         assertThat(t.metric("temperature").value()).isEqualTo(26.2);
@@ -243,7 +252,7 @@ class ScriptPathIT extends IntegrationTestSupport {
                     HttpResponse.BodyHandlers.ofString());
             assertThat(res.statusCode()).isEqualTo(200);
             JsonNode response = CODEC.mapper().readTree(res.body()).get("response");
-            assertThat(response.get("ok").asBoolean()).isEqualTo(i % 3 == 0);
+            assertThat(response.get("ok").asBoolean()).as("%d번째: %s", i, response).isEqualTo(i % 3 == 0);
         }
         HttpResponse<String> check = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
                         + "/internal/pipeline/scripts/check")).header("Content-Type", "application/json")

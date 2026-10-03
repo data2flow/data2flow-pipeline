@@ -50,6 +50,8 @@ public class ScriptSandbox implements AutoCloseable {
 
     /** 사용자 코드 앞에 붙이는 엄격 모드 선언. 같은 줄에 붙여 줄 번호는 그대로 두고 1번 줄의 열만 보정한다 */
     private static final String STRICT_PREFIX = "'use strict';";
+    /** CPU 시간 초과 때 같은 한도로 다시 실행하는 최대 횟수(처음 시간 초과이거나 전에 성공한 코드만, {@link #run}) */
+    static final int TIMEOUT_RETRIES = 2;
     private static final String FORBIDDEN_MARK = "__D2F_FORBIDDEN__:";
     private static final String ENTRY_MISSING_MARK = "__D2F_ENTRY_MISSING__:";
     /** 모듈 적재 구문(import, 동적 import()). 문법이라 머리말로 막을 수 없으므로 실행 전에 거부한다(BR-SCR-05와 같은 규칙) */
@@ -63,6 +65,10 @@ public class ScriptSandbox implements AutoCloseable {
     private final ResourceLimits resourceLimits;
     private final JsonMapper mapper = MessageCodec.newMapper();
     private final RunHistory history = new RunHistory(4096);
+    /** 가상 스레드에서 온 실행을 맡는 플랫폼 스레드(CPU 시간 측정용, 크기 = CPU 수). {@link #run} 참고 */
+    private final java.util.concurrent.ExecutorService runners;
+    /** 이 스레드에서 마지막 실행이 워치독 아래에서 쓴 CPU 시간(나노초). 예열이 "충분히 데워졌는지" 재는 데만 쓴다 */
+    private final ThreadLocal<long[]> lastWatchedNanos = ThreadLocal.withInitial(() -> new long[1]);
 
     public ScriptSandbox(ScriptLimits limits) {
         if (System.getProperty("polyglotimpl.AttachLibraryFailureAction") == null) {
@@ -78,6 +84,13 @@ public class ScriptSandbox implements AutoCloseable {
                 .cached(true).buildLiteral();
         this.resourceLimits = ResourceLimits.newBuilder().statementLimit(limits.statementLimit(), null).build();
         this.watchdog = new ScriptWatchdog();
+        int size = Math.max(2, Runtime.getRuntime().availableProcessors());
+        java.util.concurrent.atomic.AtomicInteger seq = new java.util.concurrent.atomic.AtomicInteger();
+        this.runners = java.util.concurrent.Executors.newFixedThreadPool(size, r -> {
+            Thread t = new Thread(r, "script-runner-" + seq.incrementAndGet());
+            t.setDaemon(true);
+            return t;
+        });
     }
 
     public ScriptLimits limits() {
@@ -95,19 +108,46 @@ public class ScriptSandbox implements AutoCloseable {
      * @param now        {@code ctx.util.now()}가 돌려줄 처리 시각
      */
     public ScriptOutcome run(ScriptKind kind, String code, String sourceName, String inputJson, String ctxJson, Instant now) {
-        ScriptOutcome first = runOnce(kind, code, sourceName, inputJson, ctxJson, now);
-        String key = code == null ? "" : code.length() + ":" + code.hashCode();
-        if (isTimeout(first) && history.shouldRetry(key)) {
-            // 해석 실행(JIT 없음)에서 처음 쓰는 언어 기능의 초기화 비용이나 GC·페이지 할당 지연으로 정상 스크립트가 한도를 넘을 수 있다.
-            // 처음 시간 초과이거나 전에 성공한 코드면 한 번만 다시 실행한다(스크립트는 부수 효과가 없어 다시 실행해도 안전).
-            ScriptOutcome second = runOnce(kind, code, sourceName, inputJson, ctxJson, now);
-            second = new ScriptOutcome(second.output(), second.failure(), second.logs(),
-                    first.durationMs() + second.durationMs(), second.outputBytes());
-            history.record(key, !isTimeout(second));
-            return second;
+        if (Thread.currentThread().isVirtual()) {
+            // 가상 스레드는 스레드 CPU 시간을 잴 수 없어 워치독이 벽시계로 50ms를 재게 된다(부하·GC 정지에 그대로 걸려 정상 스크립트가
+            // 시간 초과로 보임). 그래서 플랫폼 스레드 풀에서 실행하고 기다린다(가상 스레드는 기다리는 동안 캐리어를 놓는다)
+            java.util.concurrent.Future<ScriptOutcome> future = runners.submit(
+                    () -> runWithRetry(kind, code, sourceName, inputJson, ctxJson, now));
+            try {
+                return future.get();
+            } catch (InterruptedException e) {
+                future.cancel(true);
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("스크립트 실행을 기다리다 중단되었습니다", e);
+            } catch (java.util.concurrent.ExecutionException e) {
+                if (e.getCause() instanceof RuntimeException runtime) {
+                    throw runtime;
+                }
+                throw new IllegalStateException(e.getCause());
+            }
         }
-        history.record(key, !isTimeout(first));
-        return first;
+        return runWithRetry(kind, code, sourceName, inputJson, ctxJson, now);
+    }
+
+    private ScriptOutcome runWithRetry(ScriptKind kind, String code, String sourceName, String inputJson, String ctxJson,
+                                       Instant now) {
+        ScriptOutcome outcome = runOnce(kind, code, sourceName, inputJson, ctxJson, now, limits.cpuTime());
+        String key = code == null ? "" : code.length() + ":" + code.hashCode();
+        if (isTimeout(outcome) && history.shouldRetry(key)) {
+            // 해석 실행(JIT 없음)에서는 JVM 쪽 사건(HotSpot이 Truffle 인터프리터를 다시 컴파일하는 전환, G1 동시 수집 주기 직후)이
+            // 실행 스레드의 CPU 시간에 수백 ms를 더할 수 있고, 바로 다음 실행도 아직 느릴 수 있다(측정: 튐 300~450ms, 다음 45~140ms).
+            // 그래서 처음 시간 초과이거나 전에 성공한 코드면 같은 한도로 최대 TIMEOUT_RETRIES번 다시 실행한다(스크립트는 부수 효과가
+            // 없어 다시 실행해도 안전). 실행마다 한도(50ms)는 그대로이고, 무한 루프는 처음 한 번만 (1+TIMEOUT_RETRIES)×50ms를 쓰고
+            // 그 뒤로는 기록 때문에 재시도하지 않는다
+            double total = outcome.durationMs();
+            for (int i = 0; i < TIMEOUT_RETRIES && isTimeout(outcome); i++) {
+                outcome = runOnce(kind, code, sourceName, inputJson, ctxJson, now, limits.cpuTime());
+                total += outcome.durationMs();
+            }
+            outcome = new ScriptOutcome(outcome.output(), outcome.failure(), outcome.logs(), total, outcome.outputBytes());
+        }
+        history.record(key, !isTimeout(outcome));
+        return outcome;
     }
 
     private static boolean isTimeout(ScriptOutcome outcome) {
@@ -116,7 +156,7 @@ public class ScriptSandbox implements AutoCloseable {
     }
 
     private ScriptOutcome runOnce(ScriptKind kind, String code, String sourceName, String inputJson, String ctxJson,
-                                  Instant now) {
+                                  Instant now, java.time.Duration cpuLimit) {
         long started = System.nanoTime();
         if (code == null || code.getBytes(StandardCharsets.UTF_8).length > limits.maxCodeBytes()) {
             return failed(ScriptFailure.of(ScriptErrorCode.SCRIPT_RUNTIME_ERROR,
@@ -128,6 +168,7 @@ public class ScriptSandbox implements AutoCloseable {
             return failed(new ScriptFailure(ScriptErrorCode.SCRIPT_FORBIDDEN_API, "사용할 수 없는 기능입니다: import(모듈 적재)",
                     line, null), List.of(), started);
         }
+        lastWatchedNanos.get()[0] = -1;
         Context context = newContext();
         ScriptWatchdog.Watch watch = null;
         Value logsFn = null;
@@ -138,10 +179,11 @@ public class ScriptSandbox implements AutoCloseable {
             logsFn = api.getMember("logs");
             Source user = Source.newBuilder("js", STRICT_PREFIX + code, sourceName).cached(true).buildLiteral();
             Value program = context.parse(user);
-            watch = watchdog.start(context, limits.cpuTime(), limits.wallTime());
+            watch = watchdog.start(context, cpuLimit, limits.wallTime());
             program.execute();
             Value result = invoke.execute(kind.functionName(), inputJson, ctxJson, now.toString());
             JsonNode output = new GuestValueConverter(limits.maxOutputDepth(), limits.maxOutputBytes()).convert(result);
+            lastWatchedNanos.get()[0] = watch.elapsedNanos();
             watch.close();
             int bytes = mapper.writeValueAsBytes(output).length;
             List<String> logs = readLogs(logsFn);
@@ -190,11 +232,46 @@ public class ScriptSandbox implements AutoCloseable {
     }
 
     /**
-     * 처음 실행이 느린 문제(클래스 적재·내장 함수 초기화)를 시작할 때 미리 치른다(readiness 예열, reliability-and-ha.md §4.2).
-     * 해석 실행(JIT 없음)에서는 처음 쓰는 내장 함수 경로가 수십 ms 걸려 정상 스크립트가 시간 초과로 보일 수 있으므로, 자주 쓰는
-     * 내장 함수와 오류 경로를 모두 한 번씩 지난다.
+     * 처음 실행이 느린 문제를 시작할 때 미리 치른다(readiness 예열, reliability-and-ha.md §4.2, flow-engine-and-live-reload.md §5).
+     *
+     * <p>GraalJS 커뮤니티판은 일반 JDK에서 해석 실행(Truffle JIT 없음)이므로, 스크립트 실행 비용은 Truffle 인터프리터 자체(자바 코드)가
+     * HotSpot C1·C2로 컴파일되었는지에 달려 있다. 측정(M1 Pro, 새 코드의 DECODE 1회 감시 구간 CPU): 예열 3바퀴 직후 15~35ms이고,
+     * 실행이 약 180회 쌓일 무렵 HotSpot이 인터프리터를 다시 컴파일하는 전환 구간에서 한 실행이 50ms를 넘는 튐이 생긴다(부하를 주면
+     * 재시도까지 둘 다 넘어 {@code SCRIPT_TIMEOUT}, DECODE면 {@code DECODE_ERROR}). 예열 3바퀴(45회)로는 이 전환이 실제 처리 중에
+     * 일어난다. 그래서 횟수를 고정하지 않고, 대표 스크립트의 감시 구간 CPU 시간이 목표({@code target}, 기본 한도의 1/5) 아래로
+     * {@code stableRounds}바퀴 이어질 때까지 반복한다(보통 15~30바퀴, 5~10초). 최소 {@code minRounds}, 최대 {@code maxRounds}바퀴·
+     * {@code maxTime}까지만 하고, 목표에 못 미치면 결과에 남긴다(시작 로그 경고). 사용자 스크립트의 한도(50ms)는 바꾸지 않는다.
+     *
+     * @return 예열 결과(횟수, 마지막 측정값, 목표 도달 여부)
      */
-    public void warmUp(int rounds) {
+    public WarmUpResult warmUp(WarmUpPolicy policy) {
+        long started = System.nanoTime();
+        long deadline = started + policy.maxTime().toNanos();
+        long targetNanos = policy.target().toNanos();
+        int rounds = 0;
+        int stable = 0;
+        long last = -1;
+        while (rounds < policy.maxRounds()) {
+            last = warmUpRound();
+            rounds++;
+            stable = last >= 0 && last <= targetNanos ? stable + 1 : 0;
+            if (rounds >= policy.minRounds() && stable >= policy.stableRounds()) {
+                break;
+            }
+            if (System.nanoTime() > deadline) {
+                break;
+            }
+        }
+        boolean reached = stable >= policy.stableRounds();
+        return new WarmUpResult(rounds, last / 1_000_000.0, reached, (System.nanoTime() - started) / 1_000_000);
+    }
+
+    /**
+     * 예열 한 바퀴: 자주 쓰는 내장 함수와 오류 경로를 모두 한 번씩 지난다.
+     *
+     * @return 대표 DECODE·TRANSFORM 스크립트의 감시 구간 CPU 시간 중 큰 값(나노초), 잴 수 없으면 -1
+     */
+    private long warmUpRound() {
         String decode = loadResource("/script/warmup-decode.js");
         String transform = loadResource("/script/warmup-transform.js");
         String[] errors = {
@@ -216,15 +293,43 @@ public class ScriptSandbox implements AutoCloseable {
                 + "{\"key\":\"humidity\",\"value\":40,\"quality\":0}]}";
         String ctx = "{\"config\":{\"offset\":0.5},\"device\":{\"id\":1,\"attributes\":{\"tempOffset\":0.1}},"
                 + "\"last\":{\"temperature\":{\"value\":21.5,\"measuredAt\":\"2026-01-01T00:00:00Z\"}}}";
-        for (int i = 0; i < rounds; i++) {
-            run(ScriptKind.DECODE, decode, "warm-decode.js",
-                    "{\"topic\":\"t\",\"payload\":{\"a\":1},\"payloadBase64\":\"AXVkA2cQAQRoeAV9GgQ=\","
-                            + "\"payloadEncoding\":\"JSON\",\"receivedAt\":\"2026-01-01T00:00:00Z\"}", ctx, Instant.EPOCH);
-            run(ScriptKind.TRANSFORM, transform, "warm-transform.js", input, ctx, Instant.EPOCH);
-            for (String error : errors) {
-                run(ScriptKind.TRANSFORM, error, "warm-error.js", input, ctx, Instant.EPOCH);
-            }
+        // 예열 스크립트는 우리 코드(무한 루프 없음)다. 사용자 CPU 한도로 돌리면 덜 데워졌거나 CPU가 부족할 때 중간에 끊겨 뒤쪽 경로가
+        // 영영 데워지지 않으므로, 벽시계 상한(1초)만 걸고 끝까지 돌린다. 사용자 스크립트의 한도는 바뀌지 않는다
+        java.time.Duration relaxed = limits.wallTime();
+        ScriptOutcome d = runOnce(ScriptKind.DECODE, decode, "warm-decode.js",
+                "{\"topic\":\"t\",\"payload\":{\"a\":1},\"payloadBase64\":\"AXVkA2cQAQRoeAV9GgQ=\","
+                        + "\"payloadEncoding\":\"JSON\",\"receivedAt\":\"2026-01-01T00:00:00Z\"}", ctx, Instant.EPOCH, relaxed);
+        long decodeNanos = d.ok() ? lastWatchedNanos.get()[0] : -1;
+        ScriptOutcome t = runOnce(ScriptKind.TRANSFORM, transform, "warm-transform.js", input, ctx, Instant.EPOCH, relaxed);
+        long transformNanos = t.ok() ? lastWatchedNanos.get()[0] : -1;
+        for (String error : errors) {
+            runOnce(ScriptKind.TRANSFORM, error, "warm-error.js", input, ctx, Instant.EPOCH, relaxed);
         }
+        return decodeNanos < 0 || transformNanos < 0 ? -1 : Math.max(decodeNanos, transformNanos);
+    }
+
+    /**
+     * 예열 정책.
+     *
+     * @param minRounds    최소 반복 수
+     * @param maxRounds    최대 반복 수
+     * @param stableRounds 목표 아래가 이어져야 하는 반복 수
+     * @param target       대표 스크립트 1회의 감시 구간 CPU 시간 목표(한도의 1/5 권장: 부하로 2~3배 늘어도 한도 안)
+     * @param maxTime      예열에 쓰는 최대 시간(시작 지연 상한)
+     */
+    public record WarmUpPolicy(int minRounds, int maxRounds, int stableRounds, java.time.Duration target,
+                               java.time.Duration maxTime) {
+    }
+
+    /**
+     * 예열 결과.
+     *
+     * @param rounds         반복 수
+     * @param lastCpuMs      마지막 반복의 대표 스크립트 감시 구간 CPU 시간(ms), 잴 수 없으면 음수
+     * @param reachedTarget  목표에 도달했는지
+     * @param elapsedMs      걸린 시간(ms)
+     */
+    public record WarmUpResult(int rounds, double lastCpuMs, boolean reachedTarget, long elapsedMs) {
     }
 
     private Context newContext() {
@@ -246,6 +351,8 @@ public class ScriptSandbox implements AutoCloseable {
                 .allowValueSharing(false)
                 .allowInnerContextOptions(false)
                 .allowExperimentalOptions(true)
+                // 함수 본문을 parse 때 번역한다(기본은 첫 호출 때). 번역은 엔진 작업이라 사용자 CPU 한도(감시 구간) 밖에서 치른다
+                .option("js.lazy-translation", "false")
                 .option("js.allow-eval", "false")
                 .option("js.console", "false")
                 .option("js.load", "false")
@@ -393,6 +500,7 @@ public class ScriptSandbox implements AutoCloseable {
 
     @Override
     public void close() {
+        runners.shutdownNow();
         watchdog.close();
         engine.close(true);
     }

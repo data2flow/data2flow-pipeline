@@ -108,7 +108,17 @@ public class PipelineConfig {
     @Bean(destroyMethod = "close")
     ScriptSandbox scriptSandbox(PipelineProperties properties) {
         ScriptSandbox sandbox = new ScriptSandbox(properties.script().toLimits());
-        sandbox.warmUp(properties.script().warmUpRounds());
+        // 데워질 때까지 예열한다(빈 생성이 끝나야 readiness가 열린다). 목표에 못 미치면 시간 초과 오판 위험을 경고로 남긴다
+        ScriptSandbox.WarmUpResult warm = sandbox.warmUp(properties.script().toWarmUpPolicy());
+        org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ScriptSandbox.class);
+        if (warm.reachedTarget()) {
+            log.info("스크립트 샌드박스 예열 완료: {}회, {}ms, 대표 스크립트 CPU {}ms", warm.rounds(), warm.elapsedMs(),
+                    warm.lastCpuMs());
+        } else {
+            log.warn("스크립트 샌드박스 예열이 목표({})에 못 미쳤습니다: {}회, {}ms, 대표 스크립트 CPU {}ms. CPU가 부족하면 정상 스크립트도 "
+                    + "시간 초과로 보일 수 있습니다", properties.script().warmUpTarget(), warm.rounds(), warm.elapsedMs(),
+                    warm.lastCpuMs());
+        }
         return sandbox;
     }
 

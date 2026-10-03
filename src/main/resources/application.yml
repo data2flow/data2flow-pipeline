@@ -106,7 +106,13 @@ data2flow:
       max-array-length: 1048576
       max-code-bytes: 65536
       max-output-depth: 32
+      # 시작 예열(ScriptSandbox.warmUp): 대표 스크립트 1회의 감시 구간 CPU가 target 아래로 stable-rounds번 이어질 때까지.
+      # 해석 실행(JIT 없음)이라 덜 데워지면 정상 스크립트도 부하 때 50ms를 넘는다. 한도(cpu-time)는 그대로 둔다
       warm-up-rounds: 5
+      warm-up-max-rounds: 80
+      warm-up-stable-rounds: 3
+      warm-up-target: 10ms
+      warm-up-max-time: 30s
     ingest:
       max-payload-bytes: 262144
       max-metrics: 100

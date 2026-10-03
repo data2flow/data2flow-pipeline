@@ -61,7 +61,15 @@ public record PipelineProperties(
                        @DefaultValue("30s") Duration bundlePollInterval) {
     }
 
-    /** 스크립트 실행 제한(SCR-02.02, BR-SCR-02) */
+    /**
+     * 스크립트 실행 제한(SCR-02.02, BR-SCR-02)과 시작 예열.
+     *
+     * @param warmUpRounds       예열 최소 반복 수
+     * @param warmUpMaxRounds    예열 최대 반복 수
+     * @param warmUpStableRounds 목표 아래가 이어져야 끝내는 반복 수
+     * @param warmUpTarget       대표 스크립트 1회의 감시 구간 CPU 시간 목표(기본 10ms = 한도 50ms의 1/5)
+     * @param warmUpMaxTime      예열 최대 시간(시작 지연 상한)
+     */
     public record Script(@DefaultValue("50ms") Duration cpuTime,
                          @DefaultValue("1s") Duration wallTime,
                          @DefaultValue("1000000") long statementLimit,
@@ -72,11 +80,20 @@ public record PipelineProperties(
                          @DefaultValue("1048576") int maxArrayLength,
                          @DefaultValue("65536") int maxCodeBytes,
                          @DefaultValue("32") int maxOutputDepth,
-                         @DefaultValue("5") int warmUpRounds) {
+                         @DefaultValue("5") int warmUpRounds,
+                         @DefaultValue("80") int warmUpMaxRounds,
+                         @DefaultValue("3") int warmUpStableRounds,
+                         @DefaultValue("10ms") Duration warmUpTarget,
+                         @DefaultValue("30s") Duration warmUpMaxTime) {
 
         public ScriptLimits toLimits() {
             return new ScriptLimits(cpuTime, wallTime, statementLimit, maxOutputBytes, maxLogBytes, maxLogEntries,
                     maxStringLength, maxArrayLength, maxCodeBytes, maxOutputDepth);
+        }
+
+        public net.java21.data2flow.pipeline.script.service.ScriptSandbox.WarmUpPolicy toWarmUpPolicy() {
+            return new net.java21.data2flow.pipeline.script.service.ScriptSandbox.WarmUpPolicy(warmUpRounds, warmUpMaxRounds,
+                    warmUpStableRounds, warmUpTarget, warmUpMaxTime);
         }
     }
 
