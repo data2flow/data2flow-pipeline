@@ -9,6 +9,32 @@ spring:
       enabled: true
   lifecycle:
     timeout-per-shutdown-phase: 30s
+  # 기준 저장소: s3 공용 PostgreSQL DB data2flow, 스키마 data2flow_pipeline(ADR-019). 값은 환경변수(.env / k8s Secret)
+  # socketTimeout: DB가 응답 없이 멈춰도(NFR-02.02) 처리 스레드가 무한히 기다리지 않게 한다
+  datasource:
+    url: jdbc:postgresql://${DATA2FLOW_DB_HOST:localhost}:${DATA2FLOW_DB_PORT:5432}/${DATA2FLOW_DB_NAME:data2flow}?ApplicationName=data2flow-pipeline&socketTimeout=30&connectTimeout=5
+    username: ${DATA2FLOW_DB_USERNAME:data2flow}
+    password: ${DATA2FLOW_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 5000
+      initialization-fail-timeout: -1
+      connection-init-sql: SET TIME ZONE 'UTC'
+  flyway:
+    schemas: data2flow_pipeline
+    default-schema: data2flow_pipeline
+    create-schemas: true
+  # RabbitMQ(s4, vhost: prod data2flow · staging data2flow-stg · local data2flow-dev, ADR-020·030)
+  # AMQP는 도메인 이벤트·설정 변경, Stream(5552)은 data2flow.raw·data2flow.telemetry
+  rabbitmq:
+    host: ${DATA2FLOW_RABBITMQ_HOST:localhost}
+    port: ${DATA2FLOW_RABBITMQ_PORT:5672}
+    virtual-host: ${DATA2FLOW_RABBITMQ_VHOST:data2flow-dev}
+    username: ${DATA2FLOW_RABBITMQ_USERNAME:guest}
+    password: ${DATA2FLOW_RABBITMQ_PASSWORD:guest}
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    connection-timeout: 5s
 server:
   port: 8080
   shutdown: graceful
@@ -25,6 +51,80 @@ management:
     health:
       probes:
         enabled: true
+        add-additional-paths: false
+      group:
+        readiness:
+          include: readinessState,db,pipelineStream
+  health:
+    rabbit:
+      enabled: false
   metrics:
     tags:
       application: ${spring.application.name}
+    distribution:
+      percentiles-histogram:
+        ingest.e2e.latency: true
+        data2flow.script.execution: true
+
+data2flow:
+  pipeline:
+    # ADR-030: DB를 staging·prod가 함께 쓰므로 migrate는 staging 배포에서만(application-staging.yml)
+    flyway-mode: validate
+    instance-id: ${HOSTNAME:data2flow-pipeline-local}
+    developer: ${DATA2FLOW_DEV_NAME:}
+    jobs-enabled: true
+    consumer-enabled: true
+    stream:
+      port: ${DATA2FLOW_RABBITMQ_STREAM_PORT:5552}
+      partitions: 12
+      fixed-address: true
+      publish-timeout: 10s
+    core:
+      base-url: ${DATA2FLOW_CORE_URI:http://data2flow-core-api}
+      connect-timeout: 2s
+      read-timeout: 5s
+      cache-ttl: 60s
+      negative-cache-ttl: 30s
+      bundle-poll-interval: 30s
+    # 스크립트 실행 제한(SCR-02.02, BR-SCR-02). 테스트 하네스가 이 값을 그대로 읽는다
+    script:
+      cpu-time: 50ms
+      wall-time: 1s
+      statement-limit: 1000000
+      max-output-bytes: 65536
+      max-log-bytes: 1024
+      max-log-entries: 100
+      max-string-length: 1048576
+      max-array-length: 1048576
+      max-code-bytes: 65536
+      max-output-depth: 32
+      warm-up-rounds: 5
+    ingest:
+      max-payload-bytes: 262144
+      max-metrics: 100
+      max-string-bytes: 1024
+      dedup-window: 10m
+      future-tolerance: 5m
+      past-limit: 7d
+      late-threshold: 1h
+      auto-register-hourly-limit: 100
+      retry-initial: 200ms
+      retry-max: 30s
+      store-attempts: 5
+    partition:
+      months-ahead: 3
+      raw-days-ahead: 7
+      raw-retention: 30d
+      dlq-retention: 14d
+      lock-timeout: 5s
+    aggregation:
+      grace: 30s
+      default-zone: Asia/Seoul
+      backfill: 2h
+    offline:
+      default-interval-sec: 300
+      default-multiplier: 3
+      gap-factor: 3
+    lag:
+      warn: 60s
+      critical: 300s
