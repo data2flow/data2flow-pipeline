@@ -110,6 +110,12 @@
             <artifactId>js-community</artifactId>
             <type>pom</type>
         </dependency>
+        <!-- 분산 추적(OPS-02.03): Micrometer Tracing + OpenTelemetry. ingress → pipeline을 하나의 추적으로 잇는다(traceparent).
+             내보내기 주소를 설정한 환경에서만 내보낸다. Apache-2.0 -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+        </dependency>
         <!-- 기기·측정 항목 캐시(Apache-2.0, 버전은 Boot 관리) -->
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>

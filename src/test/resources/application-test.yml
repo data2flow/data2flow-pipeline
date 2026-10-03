@@ -1,0 +1,30 @@
+# 테스트 프로필(design/testing/backend.md §2). 인프라 주소는 @DynamicPropertySource로 Testcontainers 값을 넣는다.
+# 실제 s3·s4 인프라에는 붙지 않는다.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:1/never-used
+  rabbitmq:
+    host: localhost
+    port: 1
+    virtual-host: /
+management:
+  tracing:
+    sampling:
+      probability: 1.0
+data2flow:
+  pipeline:
+    flyway-mode: migrate
+    instance-id: pipeline-test
+    jobs-enabled: false
+    stream:
+      partitions: 3
+      publish-timeout: 5s
+    script:
+      warm-up-rounds: 3
+    ingest:
+      retry-initial: 100ms
+      retry-max: 2s
+logging:
+  level:
+    net.java21.data2flow: INFO
+    com.rabbitmq.stream: WARN

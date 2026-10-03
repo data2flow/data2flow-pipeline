@@ -58,6 +58,14 @@ management:
   health:
     rabbit:
       enabled: false
+  tracing:
+    sampling:
+      probability: ${DATA2FLOW_TRACING_SAMPLING:0.1}
+  # OTLP 내보내기는 주소를 정한 환경에서만(OPS-02.03). 지표는 Prometheus로 본다
+  otlp:
+    metrics:
+      export:
+        enabled: false
   metrics:
     tags:
       application: ${spring.application.name}
