@@ -1,0 +1,5 @@
+# prod: JSON 로그(요청 ID는 MDC requestId), 비밀값은 k8s Secret 환경변수
+logging:
+  structured:
+    format:
+      console: ecs

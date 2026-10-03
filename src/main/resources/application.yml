@@ -1,0 +1,30 @@
+# 공통 설정(design/conventions.md §4). 환경별 값은 application-{local,staging,prod}.yml, 비밀값은 환경변수.
+spring:
+  application:
+    name: data2flow-pipeline
+  profiles:
+    default: local
+  threads:
+    virtual:
+      enabled: true
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+server:
+  port: 8080
+  shutdown: graceful
+
+# actuator는 8081(프로브·지표 전용, k8s Service로 노출하지 않음)
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}

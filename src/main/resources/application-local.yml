@@ -1,0 +1,4 @@
+# 로컬 개발. 인프라는 s3 SSH 터널·공용 개발 DB로 붙는다(design/deployment.md §8.2). 비밀값은 루트 .env
+logging:
+  level:
+    net.java21.data2flow: DEBUG
