@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  *
  * <pre>{@code
  * {"deviceIdFrom": "topic[1]" | "$.id",
- *  "timeFrom": "$.ts",                                   // epoch ms 또는 ISO-8601, 없으면 수신 시각
+ *  "timePath": "$.ts", "timeFormat": "AUTO|EPOCH_S|EPOCH_MS|ISO8601",   // 없으면 수신 시각(DSC domain-model §2.2). timeFrom은 예전 이름(별칭)
  *  "metrics": [{"path": "$.temp", "key": "temperature", "unit": "℃"}]   // 또는 {"$.temp": "temperature"}
  *  "items": {"path": "$.sensors[*]", "keyFrom": "$.name", "valueFrom": "$.value", "unitFrom": "$.unit"}}
  * }</pre>
@@ -64,8 +64,9 @@ public class GenericJsonDecoder implements PayloadDecoder {
             throw new IngestDecodeException(key(), IngestDecodeException.EXTERNAL_ID_MISSING,
                     "기기 ID를 찾을 수 없습니다: " + config.get("deviceIdFrom").asString());
         }
-        Instant measuredAt = config.hasNonNull("timeFrom") ? time(JsonPaths.first(root, config.get("timeFrom").asString()))
-                : null;
+        String timePath = timePath(config);
+        Instant measuredAt = timePath == null ? null
+                : time(JsonPaths.first(root, timePath), config.path("timeFormat").asString("AUTO"));
         List<DecodedValue> values = new ArrayList<>();
         JsonNode metrics = config.get("metrics");
         if (metrics != null && metrics.isArray()) {
@@ -111,13 +112,33 @@ public class GenericJsonDecoder implements PayloadDecoder {
         return node == null || !node.isValueNode() ? null : node.asString();
     }
 
-    private static Instant time(JsonNode node) {
+    /** 시각 형식(DSC domain-model §2.2 {@code timeFormat}) */
+    static final java.util.Set<String> TIME_FORMATS = java.util.Set.of("AUTO", "EPOCH_S", "EPOCH_MS", "ISO8601");
+
+    /** 측정 시각 경로: 문서 이름 {@code timePath}, 예전 이름 {@code timeFrom}도 읽는다 */
+    static String timePath(JsonNode config) {
+        if (config.hasNonNull("timePath")) {
+            return config.get("timePath").asString();
+        }
+        return config.hasNonNull("timeFrom") ? config.get("timeFrom").asString() : null;
+    }
+
+    private static Instant time(JsonNode node, String format) {
         if (node == null || node.isNull()) {
             return null;
         }
-        if (node.isNumber()) {
-            long v = node.asLong();
-            return v < 100_000_000_000L ? Instant.ofEpochSecond(v) : Instant.ofEpochMilli(v);
+        if (node.isNumber() || "EPOCH_S".equals(format) || "EPOCH_MS".equals(format)) {
+            long v;
+            try {
+                v = node.isNumber() ? node.asLong() : Long.parseLong(node.asString().trim());
+            } catch (NumberFormatException e) {
+                return null;
+            }
+            return switch (format) {
+                case "EPOCH_S" -> Instant.ofEpochSecond(v);
+                case "EPOCH_MS" -> Instant.ofEpochMilli(v);
+                default -> v < 100_000_000_000L ? Instant.ofEpochSecond(v) : Instant.ofEpochMilli(v);
+            };
         }
         try {
             return Instant.parse(node.asString());

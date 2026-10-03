@@ -56,6 +56,29 @@ class GenericJsonDecoderTest {
     }
 
     @Test
+    @DisplayName("[ING-02.03][DSC-01.06] TC-ING-039 core가 저장하는 이름 timePath·timeFormat(EPOCH_S·EPOCH_MS·ISO8601·AUTO)을 읽는다")
+    void timePathAndFormat() throws Exception {
+        String payload = "{\"id\":\"d\",\"ts\":1790994000,\"ms\":\"1790994000123\",\"iso\":\"2026-10-03T01:00:00Z\",\"t\":1}";
+        Instant s = decoder.decode(DecoderTestSupport.raw("x", payload),
+                config("{\"deviceIdFrom\":\"$.id\",\"timePath\":\"$.ts\",\"timeFormat\":\"EPOCH_S\",\"metrics\":[{\"path\":\"$.t\",\"key\":\"t\"}]}")).measuredAt();
+        Instant ms = decoder.decode(DecoderTestSupport.raw("x", payload),
+                config("{\"deviceIdFrom\":\"$.id\",\"timePath\":\"$.ms\",\"timeFormat\":\"EPOCH_MS\",\"metrics\":[{\"path\":\"$.t\",\"key\":\"t\"}]}")).measuredAt();
+        Instant iso = decoder.decode(DecoderTestSupport.raw("x", payload),
+                config("{\"deviceIdFrom\":\"$.id\",\"timePath\":\"$.iso\",\"timeFormat\":\"ISO8601\",\"metrics\":[{\"path\":\"$.t\",\"key\":\"t\"}]}")).measuredAt();
+        Instant auto = decoder.decode(DecoderTestSupport.raw("x", payload),
+                config("{\"deviceIdFrom\":\"$.id\",\"timePath\":\"$.ts\",\"metrics\":[{\"path\":\"$.t\",\"key\":\"t\"}]}")).measuredAt();
+        Instant bad = decoder.decode(DecoderTestSupport.raw("x", "{\"id\":\"d\",\"ts\":\"x\",\"t\":1}"),
+                config("{\"deviceIdFrom\":\"$.id\",\"timePath\":\"$.ts\",\"timeFormat\":\"EPOCH_S\",\"metrics\":[{\"path\":\"$.t\",\"key\":\"t\"}]}")).measuredAt();
+        assertThat(s).isEqualTo(Instant.ofEpochSecond(1790994000L)).isEqualTo(auto);
+        assertThat(ms).isEqualTo(Instant.ofEpochMilli(1790994000123L));
+        assertThat(iso).isEqualTo(Instant.parse("2026-10-03T01:00:00Z"));
+        assertThat(bad).isNull();
+        assertThat(GenericJsonMappingValidator.validate(config(
+                "{\"deviceIdFrom\":\"$.id\",\"timePath\":\"$.ts\",\"timeFormat\":\"WEEKS\",\"metrics\":[{\"path\":\"$.t\",\"key\":\"t\"}]}")))
+                .anyMatch(e -> e.contains("timeFormat"));
+    }
+
+    @Test
     @DisplayName("[ING-02.03][AT-ING-02.3] TC-ING-040 잘못된 JSONPath·토픽 인덱스 범위 밖·키 중복 매핑은 거부")
     void invalidMappings() {
         assertThat(GenericJsonMappingValidator.validate(config("{\"deviceIdFrom\":\"$..bad\",\"metrics\":[{\"path\":\"$.a\",\"key\":\"a\"}]}")))

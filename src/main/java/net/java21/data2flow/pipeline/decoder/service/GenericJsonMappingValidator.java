@@ -40,8 +40,12 @@ public final class GenericJsonMappingValidator {
                 errors.add("deviceIdFrom 경로가 잘못되었습니다: " + from.asString());
             }
         }
-        if (config.hasNonNull("timeFrom") && !JsonPaths.isValid(config.get("timeFrom").asString())) {
-            errors.add("timeFrom 경로가 잘못되었습니다: " + config.get("timeFrom").asString());
+        String timePath = GenericJsonDecoder.timePath(config);
+        if (timePath != null && !JsonPaths.isValid(timePath)) {
+            errors.add("timePath 경로가 잘못되었습니다: " + timePath);
+        }
+        if (config.hasNonNull("timeFormat") && !GenericJsonDecoder.TIME_FORMATS.contains(config.get("timeFormat").asString())) {
+            errors.add("timeFormat은 AUTO·EPOCH_S·EPOCH_MS·ISO8601 중 하나입니다: " + config.get("timeFormat").asString());
         }
         Set<String> keys = new HashSet<>();
         JsonNode metrics = config.get("metrics");
