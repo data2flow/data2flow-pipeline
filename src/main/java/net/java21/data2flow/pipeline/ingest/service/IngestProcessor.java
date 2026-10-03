@@ -4,6 +4,7 @@ import net.java21.data2flow.contracts.message.CanonicalTelemetry;
 import net.java21.data2flow.contracts.message.EventType;
 import net.java21.data2flow.contracts.message.MessageCodec;
 import net.java21.data2flow.contracts.message.RawEnvelope;
+import net.java21.data2flow.contracts.message.SignatureStatus;
 import net.java21.data2flow.contracts.message.SourceTypes;
 import net.java21.data2flow.contracts.message.decoder.DecodeException;
 import net.java21.data2flow.contracts.message.decoder.DecodedUplink;
@@ -121,6 +122,11 @@ public class IngestProcessor {
 
     /** 재처리(API-ING-22): 보관한 원본을 현재 디코더·스크립트로 다시 처리해 같은 행을 갱신한다 */
     public Outcome reprocess(RawMessageRow raw) {
+        // DSC-03.05: 서명 검증에 실패해 거부한 원본은 서명 결과를 보관하지 않으므로 재처리로 되살리지 않는다
+        if (SourceTypes.PLATFORM_BROKER.equals(raw.sourceType()) && raw.status() == RawMessageStatus.INVALID
+                && SignatureStatus.ERROR_CODE.equals(raw.errorCode())) {
+            return new Outcome(raw.status(), raw.id(), false, raw.errorCode(), true);
+        }
         RawEnvelope envelope = new RawEnvelope(RawEnvelope.VERSION, raw.messageId(), raw.organizationId(), raw.sourceId(),
                 raw.sourceType(), raw.topic(), raw.payload(), raw.receivedAt(), raw.ingressInstance(), raw.dedupKey(),
                 raw.virtual(), null);
@@ -209,6 +215,11 @@ public class IngestProcessor {
         if (env.payload().length > properties.ingest().maxPayloadBytes()) {
             d.fail(RawMessageStatus.INVALID, MessageLimitValidator.PAYLOAD_EXCEEDED,
                     "payload가 " + properties.ingest().maxPayloadBytes() + "바이트를 넘습니다: " + env.payload().length, mapper);
+            return;
+        }
+        // DSC-03.03: ingress가 서명 키가 있는 기기의 서명 없음·불일치로 판정한 메시지는 디코딩 없이 거부한다
+        if (SourceTypes.PLATFORM_BROKER.equals(env.sourceType()) && SignatureStatus.INVALID.equals(env.signatureStatus())) {
+            signatureRejected(d, "서명 키가 있는 기기의 메시지인데 서명이 없거나 맞지 않습니다");
             return;
         }
         Optional<SourceContext> source = deps.sources.get(env.sourceId());
@@ -385,11 +396,38 @@ public class IngestProcessor {
             return false;
         }
         d.device = device;
+        // DSC-03.05: 승인된 플랫폼 브로커 기기는 서명이 맞는 메시지(VERIFIED)만 받는다. ingress 키 캐시가 늦어도
+        // 승인 뒤 서명 없는 메시지·폐기된 키의 메시지가 정상으로 들어오지 않게 여기서 한 번 더 막는다. 재처리는 서명 결과가 없어
+        // 거부하지 않고 qualify()에서 미검증(quality 2)으로 둔다
+        if (SourceTypes.PLATFORM_BROKER.equals(env.sourceType()) && !d.reprocessing()
+                && device.telemetryStatus() != CanonicalTelemetry.DeviceStatus.PENDING
+                && !SignatureStatus.VERIFIED.equals(env.signatureStatus())) {
+            d.trace.stage("identify", true, ms(started)).put("deviceId", device.deviceId());
+            signatureRejected(d, "승인된 기기의 메시지는 서명이 맞아야 합니다(" + env.signatureStatus() + ")");
+            return false;
+        }
         ObjectNode info = d.trace.stage("identify", true, ms(started));
         info.put("deviceId", device.deviceId());
         info.put("status", device.telemetryStatus().name());
         info.put("autoRegistered", autoRegistered);
         return true;
+    }
+
+    /** 서명 거부(DSC-03.03·03.05): 원본만 INVALID + DEVICE_SIGNATURE_INVALID로 남기고 지표를 올린다 */
+    private void signatureRejected(MessageDraft d, String message) {
+        RawEnvelope env = d.envelope;
+        if (d.externalId == null && env.topic() != null) {
+            String[] parts = env.topic().split("/");
+            if (parts.length >= 2 && "devices".equals(parts[0]) && !parts[1].isBlank()) {
+                d.externalId = DeviceDirectory.normalize(parts[1]);
+            }
+        }
+        d.fail(RawMessageStatus.INVALID, SignatureStatus.ERROR_CODE, message, mapper);
+        if (env.signatureStatus() != null) {
+            d.errorDetail.put("signatureStatus", env.signatureStatus());
+        }
+        d.trace.stage("signature", false, 0).put("signatureStatus", String.valueOf(env.signatureStatus()));
+        deps.metrics.signatureRejected(env.sourceId());
     }
 
     private void quotaRejected(MessageDraft d, int limit, boolean firstRejection, long started) {
@@ -610,7 +648,7 @@ public class IngestProcessor {
             d.trace.stage("metrics", true, 0).put("unverifiedRegistered", String.join(",", unknown.keySet()));
         }
         boolean quarantine = SourceTypes.PLATFORM_BROKER.equals(d.envelope.sourceType())
-                && d.device.telemetryStatus() == CanonicalTelemetry.DeviceStatus.PENDING;
+                && (d.device.telemetryStatus() == CanonicalTelemetry.DeviceStatus.PENDING || d.reprocessing());
         boolean forecast = SourceTypes.KMA_WEATHER.equals(d.envelope.sourceType())
                 && d.envelope.topic() != null && d.envelope.topic().contains("forecast");
         List<MessageDraft.MetricOut> qualified = d.metrics.stream().map(m -> {

@@ -26,6 +26,18 @@
 | 부름(core) | API-ING-21, API-DEV-120·121·122·123·124·125·130, API-SCR-32·34 |
 | 받음 | API-SCR-30 `POST /internal/pipeline/scripts/check`, API-SCR-31 `…/scripts/test-run`, API-ING-22 `…/reprocess-items`, API-ING-23 `…/reprocess-jobs`(·`/{job-id}/cancel`), API-ING-24 `…/dlq-items/discard`, API-TSD-51 `…/telemetry/remap-metric` |
 
+## 플랫폼 브로커 기기 서명 (DSC-03.03·03.05, ADR-042)
+
+ingress가 `RawEnvelope.signatureStatus`(VERIFIED·UNSIGNED·INVALID)를 채우고, pipeline은 기기 상태와 함께 판정합니다.
+
+| 경우 | 결과 |
+|---|---|
+| `INVALID`(서명 키가 있는데 서명 없음·불일치) | 디코딩 없이 원본만 `INVALID` + `DEVICE_SIGNATURE_INVALID`, 자동 등록·저장 0, 지표 `data2flow_ingest_signature_rejected_total` |
+| 승인 대기(PENDING) 기기 | 서명과 무관하게 저장하되 quality 2(격리) |
+| 승인된 기기 + `VERIFIED` | 정상 처리(quality 0 등) |
+| 승인된 기기 + `UNSIGNED`·없음 | `INVALID` + `DEVICE_SIGNATURE_INVALID`(ingress 키 캐시가 늦어도 승인 뒤 서명 없는 메시지를 막음) |
+| 재처리(API-ING-22·23) | 서명 거부 원본은 그대로 둔다. 그 밖의 플랫폼 브로커 원본은 서명 결과를 보관하지 않으므로 quality 2(미검증)로 다시 저장 |
+
 ## 작업 규칙
 
 스펙 ID에서 시작하고(인수 테스트 → 테스트 케이스 → 구현), 브랜치·PR·테스트 이름에 스펙 ID를 남깁니다. 1.0 전에는 `main` + `feat/<스펙ID>-<요약>`, 1.0 뒤에는 버전 브랜치 `feature/vX.Y`를 씁니다(ADR-039).

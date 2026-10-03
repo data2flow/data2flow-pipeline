@@ -27,6 +27,14 @@ public class IngestMetrics {
                 .register(registry).increment();
     }
 
+    /** 플랫폼 브로커 기기 서명 거부(DSC-03.03, {@code data2flow_ingest_signature_rejected_total}) */
+    public void signatureRejected(long sourceId) {
+        Counter.builder("data2flow.ingest.signature.rejected")
+                .description("플랫폼 브로커 기기 서명 없음·불일치로 거부한 메시지 수(DSC-03.03·03.05)")
+                .tag("source_id", Long.toString(sourceId))
+                .register(registry).increment();
+    }
+
     /** 수신에서 표준 메시지 발행까지(재처리 메시지는 부르지 않는다) */
     public void latency(long sourceId, Duration latency) {
         Timer.builder("ingest.e2e.latency")
