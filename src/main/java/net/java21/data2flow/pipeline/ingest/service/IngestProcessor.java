@@ -170,8 +170,9 @@ public class IngestProcessor {
         if (prior.status() == RawMessageStatus.OK && !prior.dropped() && prior.processingTrace() != null) {
             JsonNode canonical = mapper.readTree(prior.processingTrace()).get("canonical");
             if (canonical != null && canonical.isObject()) {
-                deps.telemetry.publish(MessageCodec.create().read(mapper.writeValueAsBytes(canonical),
-                        CanonicalTelemetry.class));
+                CanonicalTelemetry t = MessageCodec.create().read(mapper.writeValueAsBytes(canonical), CanonicalTelemetry.class);
+                deps.telemetry.publish(t);
+                publishUplinkSignal(t, prior.topic());   // 커밋 뒤 발행 전에 멈췄던 경우를 위해 다시 낸다(같은 messageId)
                 published = true;
             }
         }
@@ -205,6 +206,9 @@ public class IngestProcessor {
             }
         }
         publishEvents(env.organizationId(), stored);
+        if (live && stored.canonical() != null) {
+            publishUplinkSignal(stored.canonical(), env.topic());
+        }
         if (d.status != RawMessageStatus.DUPLICATE) {
             deps.dedup.record(d.partition, env.organizationId(), d.dedupKey, env.receivedAt());
         }
@@ -242,6 +246,16 @@ public class IngestProcessor {
         if (stored.clockSkew() != null) {
             deps.events.publish(EventType.INGEST_CLOCK_SKEW_SUSPECTED, organizationId, stored.clockSkew());
         }
+    }
+
+    /**
+     * EVT-ACT-07 LoRaWAN 업링크 신호(ACT-07.02, ADR-049 남은 것 ②): 승인된 실제 기기의 ChirpStack 업링크면 action이 Class A 대기 다운링크를
+     * 보내도록 낸다. 발행 확인 뒤에 돌아오므로 스트림 오프셋은 그 뒤에 저장된다(최소 1회).
+     */
+    private void publishUplinkSignal(CanonicalTelemetry canonical, String topic) {
+        net.java21.data2flow.pipeline.ingest.domain.LoRaWanUplinkSignal.from(canonical, topic).ifPresent(signal ->
+                deps.events.publish(EventType.DEVICE_STATE_REPORTED, canonical.organizationId(), signal,
+                        net.java21.data2flow.pipeline.ingest.domain.LoRaWanUplinkSignal.messageId(canonical)));
     }
 
     private void stages(MessageDraft d) {
