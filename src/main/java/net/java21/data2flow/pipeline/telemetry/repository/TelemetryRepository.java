@@ -107,6 +107,37 @@ public class TelemetryRepository {
         return moved;
     }
 
+    /** 기기의 최근 값(창 채우기, BR-SCR-19): {@code since} 이후, 늦은 값 제외, 측정 키별 시각 순 */
+    @net.java21.data2flow.contracts.tenancy.OrganizationScopeExempt("처리 중인 메시지의 기기(이미 조직을 확인함) 창 채우기")
+    public java.util.Map<String, java.util.List<double[]>> loadRecent(long deviceId, Instant since) {
+        java.util.Map<String, java.util.List<double[]>> out = new java.util.LinkedHashMap<>();
+        jdbc.query("""
+                SELECT metric_key, time, value FROM data2flow_pipeline.telemetry
+                 WHERE device_id = ? AND time >= ? AND flags & 1 = 0 ORDER BY metric_key, time""", rs -> {
+            out.computeIfAbsent(rs.getString(1), k -> new java.util.ArrayList<>())
+                    .add(new double[]{rs.getTimestamp(2).toInstant().toEpochMilli(), rs.getDouble(3)});
+        }, deviceId, Timestamp.from(since));
+        return out;
+    }
+
+    /** 기기·측정 키들의 원본 점(수식 미리 보기, 시각 순) */
+    public java.util.List<Point> findPoints(long organizationId, long deviceId, java.util.List<String> keys, Instant from,
+                                            Instant to) {
+        if (keys.isEmpty()) {
+            return java.util.List.of();
+        }
+        return jdbc.query("""
+                SELECT metric_key, time, value FROM data2flow_pipeline.telemetry
+                 WHERE organization_id = ? AND device_id = ? AND metric_key = ANY(?) AND time >= ? AND time < ?
+                 ORDER BY time, metric_key LIMIT 20000""",
+                (rs, n) -> new Point(rs.getString(1), rs.getTimestamp(2).toInstant(), rs.getDouble(3)),
+                organizationId, deviceId, keys.toArray(String[]::new), Timestamp.from(from), Timestamp.from(to));
+    }
+
+    /** 원본 점 */
+    public record Point(String metricKey, Instant time, double value) {
+    }
+
     /** 집계 워터마크(이 시각까지 정상 갱신 완료). 없으면 null */
     public Instant currentWatermark(String level) {
         return jdbc.query("SELECT processed_until FROM data2flow_pipeline.agg_watermarks WHERE level = ?",

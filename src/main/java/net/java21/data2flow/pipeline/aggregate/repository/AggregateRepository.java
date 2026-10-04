@@ -100,6 +100,79 @@ public class AggregateRepository {
                 state_on_sec = EXCLUDED.state_on_sec, state_changes = EXCLUDED.state_changes, is_virtual = EXCLUDED.is_virtual
             """;
 
+    /**
+     * 1h → 1d, 기기마다 사이트 시간대 자정(BR-TSD-05). 시간대는 {@code device_state.timezone}(core 기기 정보), 없으면 조직 기본.
+     * [from, to)와 겹치는 날 구간만 다시 계산하고, 그 날의 1h 행을 모두 읽도록 앞뒤 2일을 더 읽는다(DST로 하루가 25시간이어도 안전).
+     */
+    private static final String DAY_SQL = """
+            WITH src AS (
+                SELECT h.*, (date_trunc('day', h.bucket AT TIME ZONE z.tz) AT TIME ZONE z.tz) AS b
+                  FROM data2flow_pipeline.telemetry_1h h
+                  CROSS JOIN LATERAL (SELECT coalesce((SELECT ds.timezone FROM data2flow_pipeline.device_state ds
+                                                        WHERE ds.device_id = h.device_id), :zone) AS tz) z
+                 WHERE h.bucket >= CAST(:from AS timestamptz) - interval '2 days'
+                   AND h.bucket < CAST(:to AS timestamptz) + interval '2 days'
+            )
+            INSERT INTO data2flow_pipeline.telemetry_1d AS t (device_id, metric_key, bucket, organization_id, count, count_all, avg,
+                min, max, sum, first, last, first_time, last_time, twa, state_on_sec, state_changes, is_virtual)
+            SELECT device_id, metric_key, b, max(organization_id),
+                   sum(count)::int, sum(count_all)::int,
+                   CASE WHEN sum(count) > 0 THEN sum(sum) / sum(count) END,
+                   min(min), max(max), sum(sum),
+                   (array_agg(first ORDER BY bucket))[1],
+                   (array_agg(last ORDER BY bucket DESC))[1],
+                   min(first_time), max(last_time),
+                   CASE WHEN sum(count) FILTER (WHERE twa IS NOT NULL) > 0
+                        THEN sum(twa * count) FILTER (WHERE twa IS NOT NULL) / sum(count) FILTER (WHERE twa IS NOT NULL) END,
+                   sum(state_on_sec)::int, sum(state_changes)::int,
+                   bool_or(is_virtual)
+              FROM src
+             WHERE b + interval '1 day' > CAST(:from AS timestamptz) AND b < CAST(:to AS timestamptz)
+             GROUP BY device_id, metric_key, b
+            ON CONFLICT (device_id, metric_key, bucket) DO UPDATE SET
+                organization_id = EXCLUDED.organization_id, count = EXCLUDED.count, count_all = EXCLUDED.count_all,
+                avg = EXCLUDED.avg, min = EXCLUDED.min, max = EXCLUDED.max, sum = EXCLUDED.sum, first = EXCLUDED.first,
+                last = EXCLUDED.last, first_time = EXCLUDED.first_time, last_time = EXCLUDED.last_time, twa = EXCLUDED.twa,
+                state_on_sec = EXCLUDED.state_on_sec, state_changes = EXCLUDED.state_changes, is_virtual = EXCLUDED.is_virtual
+            """;
+
+    /**
+     * 상태형 측정 항목의 시간별 켜짐 시간·변화 수를 원본 점에서 바로 계산한다(TSD-05.03 "열려 있던 총 시간"이 정확하도록). 값이 바뀔
+     * 때만 저장하면(ON_CHANGE, 1시간마다 하트비트) 점이 없는 분에는 1m 행이 없어 1m 합으로는 시간이 모자란다. 점마다 다음 점(없으면
+     * 구간 끝)까지를 그 값의 구간으로 보고 시간 버킷과 겹치는 만큼 센다. 앞 시간의 값을 잇기 위해 2시간 앞부터 읽는다.
+     */
+    private static final String HOUR_STATE_SQL = """
+            WITH pts AS (
+                SELECT device_id, metric_key, organization_id, is_virtual, time, value,
+                       lag(value) OVER w AS prev, lead(time) OVER w AS nxt
+                  FROM data2flow_pipeline.telemetry
+                 WHERE metric_key = ANY(:keys) AND time >= CAST(:from AS timestamptz) - interval '2 hours'
+                   AND time < CAST(:to AS timestamptz) %s
+                WINDOW w AS (PARTITION BY device_id, metric_key ORDER BY time)
+            ), spans AS (
+                SELECT pts.*, coalesce(nxt, CAST(:to AS timestamptz)) AS until FROM pts
+            ), hours AS (
+                SELECT s.device_id, s.metric_key, max(s.organization_id) AS organization_id, bool_or(s.is_virtual) AS is_virtual,
+                       h.b AS bucket,
+                       sum(CASE WHEN s.value = 1
+                                THEN extract(epoch FROM least(s.until, h.b + interval '1 hour') - greatest(s.time, h.b))
+                                ELSE 0 END) AS on_sec,
+                       count(*) FILTER (WHERE s.time >= h.b AND s.time < h.b + interval '1 hour' AND s.prev IS NOT NULL
+                                          AND s.prev <> s.value) AS changes
+                  FROM spans s
+                  CROSS JOIN LATERAL generate_series(date_trunc('hour', s.time),
+                                                     date_trunc('hour', s.until - interval '1 microsecond'),
+                                                     interval '1 hour') AS h(b)
+                 WHERE s.until > s.time AND h.b >= CAST(:from AS timestamptz) AND h.b < CAST(:to AS timestamptz)
+                 GROUP BY s.device_id, s.metric_key, h.b
+            )
+            INSERT INTO data2flow_pipeline.telemetry_1h AS t (device_id, metric_key, bucket, organization_id, count, count_all,
+                state_on_sec, state_changes, is_virtual)
+            SELECT device_id, metric_key, bucket, organization_id, 0, 0, round(on_sec)::int, changes::int, is_virtual FROM hours
+            ON CONFLICT (device_id, metric_key, bucket) DO UPDATE SET
+                state_on_sec = EXCLUDED.state_on_sec, state_changes = EXCLUDED.state_changes
+            """;
+
     private final JdbcClient jdbc;
 
     public AggregateRepository(JdbcClient jdbc) {
@@ -142,7 +215,41 @@ public class AggregateRepository {
         return rollup("telemetry_1h", "telemetry_1m", "date_trunc('hour', bucket)", from, to, deviceId, metricKey);
     }
 
-    /** 1h → 1d(사이트 시간대 자정, BR-TSD-05) */
+    /** 상태형 측정 항목의 1h 켜짐 시간·변화 수를 원본 점으로 다시 센다(전체 또는 한 기기·키) */
+    public int aggregateHourStates(Instant from, Instant to, String[] stateKeys, Long deviceId, String metricKey) {
+        if (stateKeys == null || stateKeys.length == 0) {
+            return 0;
+        }
+        boolean one = deviceId != null;
+        var spec = jdbc.sql(HOUR_STATE_SQL.formatted(one ? "AND device_id = :device AND metric_key = :key" : ""))
+                .param("keys", stateKeys).param("from", Timestamp.from(from)).param("to", Timestamp.from(to));
+        if (one) {
+            spec = spec.param("device", deviceId).param("key", metricKey);
+        }
+        return spec.update();
+    }
+
+    /** 1h → 1d, 모든 기기(기기별 사이트 시간대 자정, BR-TSD-05). {@code defaultZone}은 시간대를 모르는 기기용 */
+    public int aggregateDaysAllDevices(Instant from, Instant to, ZoneId defaultZone) {
+        return jdbc.sql(DAY_SQL).param("from", Timestamp.from(from)).param("to", Timestamp.from(to))
+                .param("zone", defaultZone.getId()).update();
+    }
+
+    /** 기기의 사이트 시간대(device_state.timezone). 없으면 빈 값 */
+    public Optional<ZoneId> findZone(long deviceId) {
+        return jdbc.sql("SELECT timezone FROM data2flow_pipeline.device_state WHERE device_id = :device AND timezone IS NOT NULL")
+                .param("device", deviceId).query(String.class).optional().flatMap(AggregateRepository::zoneOf);
+    }
+
+    static Optional<ZoneId> zoneOf(String id) {
+        try {
+            return Optional.of(ZoneId.of(id));
+        } catch (RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** 1h → 1d(사이트 시간대 자정, BR-TSD-05). 한 기기·측정 키(다시 계산) */
     public int aggregateDays(Instant from, Instant to, ZoneId zone, Long deviceId, String metricKey) {
         String zoneLiteral = "'" + zone.getId().replace("'", "") + "'";
         return rollup("telemetry_1d", "telemetry_1h",

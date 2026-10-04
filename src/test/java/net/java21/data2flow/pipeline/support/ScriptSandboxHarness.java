@@ -26,7 +26,8 @@ public final class ScriptSandboxHarness {
     public static final String NORMAL_INPUT = "{\"v\":1,\"deviceId\":17,\"measuredAt\":\"2026-10-03T00:00:00Z\","
             + "\"metrics\":[{\"key\":\"temperature\",\"value\":22.04,\"unit\":\"℃\",\"quality\":0}]}";
 
-    private static final ScriptSandbox SANDBOX = new ScriptSandbox(properties().script().toLimits());
+    private static final ScriptSandbox SANDBOX = new ScriptSandbox(properties().script().toLimits(),
+            java.util.List.of(net.java21.data2flow.pipeline.script.service.ScriptRunner.RUNTIME_KEY));
 
     static {
         SANDBOX.warmUp(properties().script().toWarmUpPolicy());

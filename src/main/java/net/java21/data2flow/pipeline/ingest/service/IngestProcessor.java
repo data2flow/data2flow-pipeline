@@ -42,6 +42,11 @@ import net.java21.data2flow.pipeline.metric.domain.MetricCatalog;
 import net.java21.data2flow.pipeline.metric.domain.MetricDefinition;
 import net.java21.data2flow.pipeline.metric.service.MetricCatalogService;
 import net.java21.data2flow.pipeline.metric.service.MetricValueMapper;
+import net.java21.data2flow.pipeline.formula.service.FormulaEngine;
+import net.java21.data2flow.pipeline.quality.domain.ClockSkewDetector;
+import net.java21.data2flow.pipeline.script.service.ScriptRunner;
+import net.java21.data2flow.pipeline.telemetry.service.RecentValues;
+import net.java21.data2flow.pipeline.quality.domain.SuspectDetector;
 import net.java21.data2flow.pipeline.script.domain.FailurePolicy;
 import net.java21.data2flow.pipeline.script.domain.ScriptKind;
 import net.java21.data2flow.script.sandbox.ScriptOutcome;
@@ -84,6 +89,8 @@ public class IngestProcessor {
     private final MeasuredAtNormalizer normalizer;
     private final LateArrivalClassifier lateClassifier;
     private final ScriptOutputValidator outputValidator;
+    /** 재처리용 의심 판정(실시간 상태를 과거 값으로 흐리지 않게 따로 둔다) */
+    private final SuspectDetector reprocessSuspects;
 
     public IngestProcessor(Deps deps, PipelineProperties properties, Clock clock) {
         this.deps = deps;
@@ -94,6 +101,8 @@ public class IngestProcessor {
         this.normalizer = new MeasuredAtNormalizer(ingest.futureTolerance(), ingest.pastLimit());
         this.lateClassifier = new LateArrivalClassifier(ingest.lateThreshold());
         this.outputValidator = new ScriptOutputValidator(ingest.maxMetrics());
+        this.reprocessSuspects = new SuspectDetector(properties.quality().stuckCount(),
+                properties.quality().jumpRangeFraction());
     }
 
     /** 협력 객체 묶음 */
@@ -102,7 +111,8 @@ public class IngestProcessor {
                        ScriptRuntimeRegistry scripts, DecoderRegistry decoders, ScriptSandbox sandbox, DedupGuard dedup,
                        IngestStore store, RawMessageRepository raws, DeviceStateRepository states,
                        TelemetryPublisher telemetry, DomainEventPublisher events, GatewayToucher gateways,
-                       IngestMetrics metrics) {
+                       IngestMetrics metrics, ClockSkewDetector skew, SuspectDetector suspects, ScriptRunner runner,
+                       FormulaEngine formulas, RecentValues recent) {
     }
 
     /** 실시간 처리 결과 */
@@ -122,6 +132,14 @@ public class IngestProcessor {
 
     /** 재처리(API-ING-22): 보관한 원본을 현재 디코더·스크립트로 다시 처리해 같은 행을 갱신한다 */
     public Outcome reprocess(RawMessageRow raw) {
+        return reprocess(raw, null);
+    }
+
+    /**
+     * 재처리(API-ING-22·23). {@code pinned}가 있으면 작업을 만들 때 고정한 스크립트 번들로 처리한다(BR-ING-12: 처리 중 새 버전이
+     * 배포되어도 작업 전체가 한 버전으로 돈다). 서명 판정은 원본에 보관한 값을 그대로 쓴다(VERIFIED였던 원본은 quality 0 유지, ADR-042).
+     */
+    public Outcome reprocess(RawMessageRow raw, ScriptRuntimeRegistry.Plan pinned) {
         // DSC-03.05: 서명 검증에 실패해 거부한 원본은 서명 결과를 보관하지 않으므로 재처리로 되살리지 않는다
         if (SourceTypes.PLATFORM_BROKER.equals(raw.sourceType()) && raw.status() == RawMessageStatus.INVALID
                 && SignatureStatus.ERROR_CODE.equals(raw.errorCode())) {
@@ -129,8 +147,10 @@ public class IngestProcessor {
         }
         RawEnvelope envelope = new RawEnvelope(RawEnvelope.VERSION, raw.messageId(), raw.organizationId(), raw.sourceId(),
                 raw.sourceType(), raw.topic(), raw.payload(), raw.receivedAt(), raw.ingressInstance(), raw.dedupKey(),
-                raw.virtual(), null);
-        return run(new MessageDraft(envelope, raw.streamPartition(), raw.streamOffset(), raw, mapper), false);
+                raw.virtual(), null, raw.signatureStatus());
+        MessageDraft draft = new MessageDraft(envelope, raw.streamPartition(), raw.streamOffset(), raw, mapper);
+        draft.pinnedPlan = pinned;
+        return run(draft, false);
     }
 
     /**
@@ -188,6 +208,11 @@ public class IngestProcessor {
         if (d.status != RawMessageStatus.DUPLICATE) {
             deps.dedup.record(d.partition, env.organizationId(), d.dedupKey, env.receivedAt());
         }
+        if (d.status == RawMessageStatus.OK && !d.dropped && d.device != null && !d.reprocessing()) {
+            Map<String, Double> values = new LinkedHashMap<>();
+            d.metrics.forEach(m -> values.put(m.key(), m.value()));
+            deps.recent.record(d.device.deviceId(), d.measuredAt, values, d.late);
+        }
         if (d.status == RawMessageStatus.OK && d.link != null && d.link.gateways() != null) {
             d.link.gateways().forEach(g -> deps.gateways.record(env.organizationId(), env.sourceId(), g.eui(),
                     env.receivedAt()));
@@ -201,6 +226,9 @@ public class IngestProcessor {
         }
         if (stored.gap() != null) {
             deps.events.publish(EventType.INGEST_GAP_DETECTED, organizationId, stored.gap());
+        }
+        if (stored.clockSkew() != null) {
+            deps.events.publish(EventType.INGEST_CLOCK_SKEW_SUSPECTED, organizationId, stored.clockSkew());
         }
     }
 
@@ -241,7 +269,7 @@ public class IngestProcessor {
         PayloadDecoder decoder = null;
         try {
             if (requiresPlan(d.source)) {
-                plan = deps.scripts.plan(env.organizationId());
+                plan = planFor(d);
             }
             decoder = deps.decoders.select(d.source, plan == null ? new ScriptRuntimeRegistry.Plan(
                     net.java21.data2flow.pipeline.script.domain.RuntimeBundle.EMPTY) : plan);
@@ -303,6 +331,11 @@ public class IngestProcessor {
             d.trace.stage("time", true, 0).put("corrected", time.reason());
         }
         d.late = lateClassifier.isLate(d.measuredAt, env.receivedAt());
+        // 시계 오차(ING-06.04): 보정 전 기기 시각으로. 가상·엣지 버퍼·재처리는 실시간 기기 시계가 아니므로 보지 않는다
+        if (!keepOriginal && !d.reprocessing()) {
+            d.clockSkew = deps.skew.observe(d.device.deviceId(), uplink.measuredAt(), env.receivedAt());
+        }
+        heartbeat(d);
         // ⑤ TRANSFORM(모델 → 기기, BR-SCR-03)
         if (!transform(d, plan)) {
             return;
@@ -312,6 +345,11 @@ public class IngestProcessor {
         }
         // ⑥ 검증·품질(ING-04.01·04.02, BR-ING-03·06)
         qualify(d, catalog);
+    }
+
+    /** 고정한 번들(재처리 작업)이 있으면 그것, 아니면 조직의 현재 계획 */
+    private ScriptRuntimeRegistry.Plan planFor(MessageDraft d) {
+        return d.pinnedPlan != null ? d.pinnedPlan : deps.scripts.plan(d.envelope.organizationId());
     }
 
     private static boolean requiresPlan(SourceContext source) {
@@ -486,11 +524,50 @@ public class IngestProcessor {
     }
 
     private boolean transform(MessageDraft d, ScriptRuntimeRegistry.Plan plan) {
-        ScriptRuntimeRegistry.Plan p = plan != null ? plan : deps.scripts.plan(d.envelope.organizationId());
+        ScriptRuntimeRegistry.Plan p = plan != null ? plan : planFor(d);
         List<ScriptRuntimeRegistry.Step> steps = p.transforms(d.device.modelId(), d.device.deviceId());
-        if (steps.isEmpty()) {
-            return true;
+        if (!steps.isEmpty() && !transformSteps(d, p, steps)) {
+            return false;
         }
+        if (!d.dropped) {
+            formulas(d, p);
+        }
+        return true;
+    }
+
+    /**
+     * 수식 파생 항목(SCR-01.06, BR-SCR-03: TRANSFORM 마지막). 결과 키는 파생(derived=true)이고 처음 보는 키는 미검증으로 등록된다
+     * (BR-SCR-07). 입력 값이 없는 수식은 그 메시지에서 건너뛴다.
+     */
+    private void formulas(MessageDraft d, ScriptRuntimeRegistry.Plan p) {
+        List<net.java21.data2flow.pipeline.script.domain.RuntimeBundle.Formula> list = FormulaEngine.applicable(p.bundle(),
+                d.device.modelId(), d.device.deviceId(), d.device.spaceId());
+        if (list.isEmpty()) {
+            return;
+        }
+        long started = System.nanoTime();
+        Map<String, Duration> windows = deps.formulas.windows(list);
+        Map<String, Double> values = new LinkedHashMap<>();
+        d.metrics.forEach(m -> values.put(m.key(), m.value()));
+        FormulaEngine.Result result = deps.formulas.evaluate(p.bundle(), list, values, execution(d,
+                windows.isEmpty() || d.late ? null : deps.recent.window(d.device.deviceId(), windows.keySet(), d.measuredAt)));
+        for (FormulaEngine.Derived x : result.derived()) {
+            d.metrics.removeIf(m -> m.key().equals(x.key()));
+            d.metrics.add(new MessageDraft.MetricOut(x.key(), x.value(), x.unit(), 0, true, x.key()));
+        }
+        ObjectNode info = d.trace.stage("formula", result.errors().isEmpty(), ms(started));
+        info.put("count", result.derived().size());
+        if (!result.errors().isEmpty()) {
+            info.put("errors", String.join("; ", result.errors()));
+        }
+    }
+
+    private ScriptRunner.Execution execution(MessageDraft d, Map<String, List<double[]>> window) {
+        return new ScriptRunner.Execution(d.envelope.organizationId(), d.device == null ? null : d.device.deviceId(),
+                d.existing == null ? null : d.existing.id(), clock.instant(), d.measuredAt, window, !d.reprocessing());
+    }
+
+    private boolean transformSteps(MessageDraft d, ScriptRuntimeRegistry.Plan p, List<ScriptRuntimeRegistry.Step> steps) {
         ObjectNode msg = draftMessage(d);
         ObjectNode ctx = mapper.createObjectNode();
         ObjectNode device = ctx.putObject("device");
@@ -506,9 +583,11 @@ public class IngestProcessor {
             ctx.set("config", step.script().config());
             long id = step.script().scriptId();
             int version = step.script().versionNo();
-            ScriptOutcome outcome = deps.sandbox.run(ScriptKind.TRANSFORM.functionName(), step.script().code(),
-                    "script-" + id + "-v" + version + ".js", mapper.writeValueAsString(msg), mapper.writeValueAsString(ctx),
-                    clock.instant());
+            Map<String, Duration> windowKeys = ScriptRunner.windowKeys(step.script().code());
+            Map<String, List<double[]>> window = windowKeys.isEmpty() || d.late ? null
+                    : deps.recent.window(d.device.deviceId(), windowKeys.keySet(), d.measuredAt);
+            ScriptOutcome outcome = deps.runner.run(p.bundle(), step.script(), ScriptKind.TRANSFORM,
+                    mapper.writeValueAsString(msg), ctx, execution(d, window));
             deps.metrics.script(id, version, outcome.durationMs(), outcome.ok());
             d.trace.script(id, version);
             d.scripts.add(new CanonicalTelemetry.ScriptRef(id, version));
@@ -516,6 +595,7 @@ public class IngestProcessor {
             info.put("scriptId", id);
             info.put("version", version);
             info.put("scope", step.scope());
+            info.put("configRevision", step.script().configRevision());
             String errorCode = outcome.ok() ? null : outcome.failure().code().name();
             String errorMessage = outcome.ok() ? null : outcome.failure().message();
             if (outcome.ok() && !outcome.returnedNull()) {
@@ -647,15 +727,19 @@ public class IngestProcessor {
             deps.catalogs.registerUnverified(d.envelope.organizationId(), d.device.deviceId(), unknown);
             d.trace.stage("metrics", true, 0).put("unverifiedRegistered", String.join(",", unknown.keySet()));
         }
+        // 승인 대기 기기는 격리(quality 2). 재처리는 보관한 서명 판정이 VERIFIED일 때만 정상 품질을 유지한다(ADR-042, M5 이전 원본은 null)
         boolean quarantine = SourceTypes.PLATFORM_BROKER.equals(d.envelope.sourceType())
-                && (d.device.telemetryStatus() == CanonicalTelemetry.DeviceStatus.PENDING || d.reprocessing());
+                && (d.device.telemetryStatus() == CanonicalTelemetry.DeviceStatus.PENDING
+                || (d.reprocessing() && !SignatureStatus.VERIFIED.equals(d.envelope.signatureStatus())));
         boolean forecast = SourceTypes.KMA_WEATHER.equals(d.envelope.sourceType())
                 && d.envelope.topic() != null && d.envelope.topic().contains("forecast");
         List<MessageDraft.MetricOut> qualified = d.metrics.stream().map(m -> {
             MetricDefinition def = catalog.definition(m.key());
             boolean unverified = def == null || def.unverified() || quarantine;
             boolean outOfRange = def != null && def.outOfRange(m.value());
-            return m.withQuality(QualityAssigner.assign(d.timeCorrected, outOfRange, false, unverified, forecast));
+            SuspectDetector detector = d.reprocessing() ? reprocessSuspects : deps.suspects;
+            boolean suspect = !forecast && detector.observe(d.device.deviceId(), m.key(), def, m.value(), d.measuredAt, d.late);
+            return m.withQuality(QualityAssigner.assign(d.timeCorrected, outOfRange, suspect, unverified, forecast));
         }).toList();
         d.metrics.clear();
         d.metrics.addAll(qualified);
@@ -664,6 +748,43 @@ public class IngestProcessor {
                     d.metrics.size() + "/" + properties.ingest().maxMetrics(), mapper);
         }
     }
+
+    /**
+     * 하트비트 카나리(ING-07.05, EVT-ING-07): 시스템 가상 기기 {@code __heartbeat__}의 메시지에 pipeline 통과 시각을
+     * {@code meta.heartbeat.stages[]}에 덧붙인다. 앞 단계(시뮬레이터·ingress)가 payload의 {@code meta.heartbeat}에 남긴 값은 잇고,
+     * 없으면 수신 시각을 ingress 단계로 넣는다.
+     */
+    private void heartbeat(MessageDraft d) {
+        if (!HEARTBEAT_DEVICE.equals(d.externalId)) {
+            return;
+        }
+        ObjectNode hb = mapper.createObjectNode();
+        ArrayNode stages = hb.putArray("stages");
+        try {
+            JsonNode prior = mapper.readTree(d.envelope.payload()).path("meta").path("heartbeat");
+            if (prior.hasNonNull("sentAt")) {
+                hb.set("sentAt", prior.get("sentAt"));
+            }
+            prior.path("stages").forEach(stages::add);
+        } catch (RuntimeException e) {
+            // JSON이 아닌 payload: 앞 단계 기록 없음
+        }
+        if (!hb.has("sentAt")) {
+            hb.put("sentAt", d.measuredAt.toString());
+        }
+        boolean ingress = false;
+        for (JsonNode st : stages) {
+            ingress |= "ingress".equals(st.path("name").asString(""));
+        }
+        if (!ingress) {
+            stages.addObject().put("name", "ingress").put("at", d.envelope.receivedAt().toString());
+        }
+        stages.addObject().put("name", "pipeline").put("at", clock.instant().toString());
+        d.heartbeat = hb;
+    }
+
+    /** 하트비트 카나리 시스템 가상 기기의 외부 ID(reliability-and-ha.md §6) */
+    public static final String HEARTBEAT_DEVICE = "__heartbeat__";
 
     private static double ms(long startedNanos) {
         return (System.nanoTime() - startedNanos) / 1_000_000.0;

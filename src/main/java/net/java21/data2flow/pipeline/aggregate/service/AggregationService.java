@@ -25,7 +25,7 @@ import java.util.function.Supplier;
  * <ul>
  *   <li>1m: 매분, 직전 완료 분(수신 지연 흡수 여유 {@code grace})까지</li>
  *   <li>1h: 5분마다, 현재 시의 부분 구간까지 다시 계산(완료된 시까지 워터마크)</li>
- *   <li>1d: 매시 10분, 사이트 시간대 자정 기준(현재 날의 부분 구간 포함)</li>
+ *   <li>1d: 매시 10분, 기기마다 사이트 시간대 자정 기준(현재 날의 부분 구간 포함, device_state.timezone, 없으면 기본 시간대)</li>
  * </ul>
  * 원본에서 언제든 다시 만들 수 있으므로 집계 테이블에는 FK가 없다.
  */
@@ -88,8 +88,10 @@ public class AggregationService {
             while (from.isBefore(minuteMark)) {
                 Instant chunkEnd = min(minuteMark, from.plus(MAX_CHUNK));
                 Instant f = from;
+                String[] keys = stateKeys.get();
                 tx.executeWithoutResult(s -> {
                     repository.aggregateHours(f, chunkEnd, null, null);
+                    repository.aggregateHourStates(f.truncatedTo(ChronoUnit.HOURS), chunkEnd, keys, null, null);
                     repository.saveWatermark(LEVEL_1H, chunkEnd.truncatedTo(ChronoUnit.HOURS), now);
                 });
                 from = chunkEnd;
@@ -99,7 +101,10 @@ public class AggregationService {
             Instant hourFrom = r.from().truncatedTo(ChronoUnit.HOURS);
             Instant hourTo = max(hourFrom.plus(Duration.ofHours(1)), ceilHour(r.to()));
             repository.aggregateHours(hourFrom, hourTo, r.deviceId(), r.metricKey());
-            ZoneId zone = settings.defaultZone();
+            if (java.util.Arrays.asList(stateKeys.get()).contains(r.metricKey())) {
+                repository.aggregateHourStates(hourFrom, hourTo, stateKeys.get(), r.deviceId(), r.metricKey());
+            }
+            ZoneId zone = zoneOf(r.deviceId());
             Instant day = dayStart(hourFrom, zone);
             repository.insertDirty(r.organizationId(), LEVEL_1D, r.deviceId(), r.metricKey(), day,
                     max(nextDay(day, zone), dayStart(hourTo.minusNanos(1), zone).plus(Duration.ofDays(1))), r.reason());
@@ -120,15 +125,23 @@ public class AggregationService {
                 Instant f = from;
                 Instant end = nextDay(from, zone);
                 tx.executeWithoutResult(s -> {
-                    repository.aggregateDays(f, end, zone, null, null);
+                    repository.aggregateDaysAllDevices(f, end, zone);
                     repository.saveWatermark(LEVEL_1D, dayStart(chunkEnd, zone), now);
                 });
                 from = end;
             }
         }
-        recomputeDirty(LEVEL_1D, (r, k) -> repository.aggregateDays(dayStart(r.from(), zone),
-                max(nextDay(dayStart(r.from(), zone), zone), r.to()), zone, r.deviceId(), r.metricKey()), null);
+        recomputeDirty(LEVEL_1D, (r, k) -> {
+            ZoneId z = zoneOf(r.deviceId());
+            repository.aggregateDays(dayStart(r.from(), z), max(nextDay(dayStart(r.from(), z), z), r.to()), z,
+                    r.deviceId(), r.metricKey());
+        }, null);
         return repository.findWatermark(LEVEL_1D).orElse(null);
+    }
+
+    /** 기기의 사이트 시간대(BR-TSD-05). 모르면 기본 시간대 */
+    private ZoneId zoneOf(long deviceId) {
+        return repository.findZone(deviceId).orElse(settings.defaultZone());
     }
 
     private Instant start(Instant to) {

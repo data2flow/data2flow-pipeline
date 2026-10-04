@@ -32,7 +32,11 @@ public record PipelineProperties(
         @DefaultValue Partition partition,
         @DefaultValue Aggregation aggregation,
         @DefaultValue Offline offline,
-        @DefaultValue Lag lag) {
+        @DefaultValue Lag lag,
+        @DefaultValue Reprocess reprocess,
+        @DefaultValue Quality quality,
+        @DefaultValue Retention retention,
+        @DefaultValue Archive archive) {
 
     /**
      * RabbitMQ Stream 연결. 호스트·계정·vhost는 {@code spring.rabbitmq.*}와 같은 값을 쓴다.
@@ -161,5 +165,77 @@ public record PipelineProperties(
 
     /** 처리 지연 경보(ING-07.04, BR-ING-16) */
     public record Lag(@DefaultValue("60s") Duration warn, @DefaultValue("300s") Duration critical) {
+    }
+
+    /**
+     * 기간 재처리 작업(ING-01.04, BR-ING-13).
+     *
+     * @param ratePerSecond     초당 처리 한도(500)
+     * @param slowRatePerSecond 실시간 처리 지연이 경고 기준을 넘을 때의 한도
+     * @param staleAfter        생존 신호가 이만큼 멈춘 작업은 다른 인스턴스가 넘겨받는다
+     */
+    public record Reprocess(@DefaultValue("500") int ratePerSecond,
+                            @DefaultValue("100") int slowRatePerSecond,
+                            @DefaultValue("2m") Duration staleAfter) {
+    }
+
+    /**
+     * 데이터 품질(ING-04.01 의심, ING-06.01 점수, ING-06.04 시계 오차).
+     *
+     * @param stuckCount         같은 값이 이 횟수만큼 이어지면 값 멈춤(quality 3, TC-ING-054: 12회)
+     * @param jumpRangeFraction  1분당 변화가 유효 범위 폭의 이 비율을 넘으면 급변(기본 0.1875: -20~60℃에서 15℃/분)
+     * @param skewThreshold      시계 오차 의심 기준(최근 1시간 평균 차이 5분, BR-ING-18)
+     * @param skewWindow         평균을 내는 창(1시간)
+     * @param skewSustain        기준을 넘은 상태가 이만큼 이어지면 이벤트(30분)
+     * @param skewClear          평균 차이가 이 값 이하로 돌아오면 해제(2분)
+     */
+    public record Quality(@DefaultValue("12") int stuckCount,
+                          @DefaultValue("0.1875") double jumpRangeFraction,
+                          @DefaultValue("5m") Duration skewThreshold,
+                          @DefaultValue("1h") Duration skewWindow,
+                          @DefaultValue("30m") Duration skewSustain,
+                          @DefaultValue("2m") Duration skewClear) {
+    }
+
+    /**
+     * 보관 기본값(NFR-04.03, TSD domain-model §2.7). 조직 정책(core 보관 정책)이 없을 때 쓴다. 0은 무기한.
+     *
+     * @param deleteBatch         행 단위 삭제 배치(BR-TSD-02: 1만 행)
+     * @param compressAfterDays   정렬 재작성 대상(BR-TSD-07: 7일 지난 원본 파티션)
+     * @param policyRefresh       core 보관 정책을 다시 읽는 주기
+     */
+    public record Retention(@DefaultValue("30") int rawMessageDays,
+                            @DefaultValue("365") int telemetryDays,
+                            @DefaultValue("90") int linkDays,
+                            @DefaultValue("90") int agg1mDays,
+                            @DefaultValue("1095") int agg1hDays,
+                            @DefaultValue("0") int agg1dDays,
+                            @DefaultValue("365") int qualityDays,
+                            @DefaultValue("7") int scriptStats1mDays,
+                            @DefaultValue("90") int scriptStats1hDays,
+                            @DefaultValue("7") int scriptLogDays,
+                            @DefaultValue("10000") int deleteBatch,
+                            @DefaultValue("7") int compressAfterDays,
+                            @DefaultValue("5m") Duration policyRefresh) {
+    }
+
+    /**
+     * 콜드 보관 오브젝트 저장소(TSD-05.02, S3 호환 API: s3 운영은 기존 storage.java21.net, 번들은 SeaweedFS). 접근 키는 환경변수.
+     *
+     * @param endpoint  S3 API 주소(예: https://storage.java21.net). 비우면 콜드 보관을 하지 않는다(보관 기간이 지나면 그냥 지움)
+     * @param bucket    버킷(prod {@code data2flow-prod}, staging {@code data2flow-stg})
+     * @param region    서명 지역
+     * @param prefix    객체 키 접두사
+     */
+    public record Archive(String endpoint,
+                          @DefaultValue("data2flow-prod") String bucket,
+                          @DefaultValue("us-east-1") String region,
+                          String accessKey,
+                          String secretKey,
+                          @DefaultValue("archive") String prefix) {
+
+        public boolean enabled() {
+            return endpoint != null && !endpoint.isBlank();
+        }
     }
 }

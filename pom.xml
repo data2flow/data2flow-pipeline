@@ -27,6 +27,8 @@
         <data2flow-contracts.version>0.1.0-SNAPSHOT</data2flow-contracts.version>
         <!-- ShedLock(Apache-2.0, design/oss-stack.md): 시계열 유지·오프라인 판정 스케줄 작업의 작업 단위 리더 -->
         <shedlock.version>7.10.1</shedlock.version>
+        <!-- 콜드 보관 Parquet(zstd) 압축(TSD-05.02, BR-TSD-07·18). BSD-2-Clause(허용, ADR-018) -->
+        <zstd-jni.version>1.5.7-9</zstd-jni.version>
     </properties>
 
     <!-- data2flow-contracts·data2flow-bom은 GitHub Packages에 있다. 읽기에도 토큰이 필요하다(README 참고) -->
@@ -116,6 +118,11 @@
         <dependency>
             <groupId>com.github.ben-manes.caffeine</groupId>
             <artifactId>caffeine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.luben</groupId>
+            <artifactId>zstd-jni</artifactId>
+            <version>${zstd-jni.version}</version>
         </dependency>
         <dependency>
             <groupId>net.javacrumbs.shedlock</groupId>

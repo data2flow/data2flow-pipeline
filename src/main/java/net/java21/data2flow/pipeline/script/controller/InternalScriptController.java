@@ -19,15 +19,22 @@ public class InternalScriptController {
     private final ScriptStaticChecker checker;
     private final ScriptTestRunService testRuns;
 
-    public InternalScriptController(ScriptStaticChecker checker, ScriptTestRunService testRuns) {
+    private final net.java21.data2flow.pipeline.script.service.ScriptRuntimeRegistry registry;
+
+    public InternalScriptController(ScriptStaticChecker checker, ScriptTestRunService testRuns,
+                                    net.java21.data2flow.pipeline.script.service.ScriptRuntimeRegistry registry) {
         this.checker = checker;
         this.testRuns = testRuns;
+        this.registry = registry;
     }
 
     /** API-SCR-30 {@code POST /internal/pipeline/scripts/check} */
     @PostMapping("/internal/pipeline/scripts/check")
     public ApiResponse<ScriptCheckResponse> check(@Valid @RequestBody ScriptCheckRequest request) {
-        var problems = checker.check(request.kind(), request.code());
+        var bundle = request.organizationId() == null
+                ? net.java21.data2flow.pipeline.script.domain.RuntimeBundle.EMPTY
+                : registry.plan(request.organizationId()).bundle();
+        var problems = checker.check(request.kind(), request.code(), request.moduleRefsOrEmpty(), bundle::module);
         return ApiResponse.success(new ScriptCheckResponse(!ScriptStaticChecker.hasErrors(problems), problems));
     }
 

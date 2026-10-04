@@ -107,7 +107,9 @@ public class PipelineConfig {
 
     @Bean(destroyMethod = "close")
     ScriptSandbox scriptSandbox(PipelineProperties properties) {
-        ScriptSandbox sandbox = new ScriptSandbox(properties.script().toLimits());
+        // ctx.runtime: 호스트가 넘기는 창 데이터·기준 시각(ScriptLinker 감싸개가 ctx.window로 바꾸고 사용자에게는 숨긴다)
+        ScriptSandbox sandbox = new ScriptSandbox(properties.script().toLimits(),
+                java.util.List.of(net.java21.data2flow.pipeline.script.service.ScriptRunner.RUNTIME_KEY));
         // 데워질 때까지 예열한다(빈 생성이 끝나야 readiness가 열린다). 목표에 못 미치면 시간 초과 오판 위험을 경고로 남긴다
         ScriptSandbox.WarmUpResult warm = sandbox.warmUp(properties.script().toWarmUpPolicy());
         org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(ScriptSandbox.class);
@@ -133,13 +135,54 @@ public class PipelineConfig {
     }
 
     @Bean
-    ScriptRuntimeRegistry scriptRuntimeRegistry(CoreDirectory core, Clock clock, PipelineProperties properties) {
-        return new ScriptRuntimeRegistry(core, clock, properties.instanceId());
+    ScriptRuntimeRegistry scriptRuntimeRegistry(CoreDirectory core, Clock clock, PipelineProperties properties,
+                                                ObjectProvider<net.java21.data2flow.pipeline.script.service.ScriptRunner> runner,
+                                                ObjectProvider<net.java21.data2flow.pipeline.formula.service.FormulaEngine> formulas) {
+        ScriptRuntimeRegistry registry = new ScriptRuntimeRegistry(core, clock, properties.instanceId());
+        registry.setWarmer((old, fresh) -> {
+            var r = runner.getIfAvailable();
+            var f = formulas.getIfAvailable();
+            if (r != null && f != null) {
+                new net.java21.data2flow.pipeline.script.service.ScriptWarmer(r, f, 3, clock).warm(old, fresh);
+            }
+        });
+        return registry;
     }
 
     @Bean
-    DecoderRegistry decoderRegistry(ScriptSandbox sandbox, ScriptOutputValidator validator, Clock clock) {
-        return new DecoderRegistry(sandbox, validator, clock);
+    DecoderRegistry decoderRegistry(ScriptSandbox sandbox, ScriptOutputValidator validator, Clock clock,
+                                    net.java21.data2flow.pipeline.script.service.ScriptRunner runner) {
+        return new DecoderRegistry(sandbox, validator, clock, runner);
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.script.service.ScriptOps scriptOps(
+            net.java21.data2flow.pipeline.script.repository.ScriptOpsRepository repository, Clock clock) {
+        return new net.java21.data2flow.pipeline.script.service.ScriptOps(repository, clock);
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.script.service.ScriptRunner scriptRunner(ScriptSandbox sandbox,
+                                                                         net.java21.data2flow.pipeline.script.service.ScriptOps ops) {
+        return new net.java21.data2flow.pipeline.script.service.ScriptRunner(sandbox, ops);
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.formula.service.FormulaEngine formulaEngine(
+            net.java21.data2flow.pipeline.script.service.ScriptRunner runner) {
+        return new net.java21.data2flow.pipeline.formula.service.FormulaEngine(runner);
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.formula.service.FormulaPreviewService formulaPreviewService(
+            net.java21.data2flow.pipeline.formula.service.FormulaEngine engine, MetricCatalogService catalogs,
+            TelemetryRepository telemetry, Clock clock) {
+        return new net.java21.data2flow.pipeline.formula.service.FormulaPreviewService(engine, catalogs, telemetry, clock);
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.telemetry.service.RecentValues recentValues(TelemetryRepository telemetry) {
+        return new net.java21.data2flow.pipeline.telemetry.service.RecentValues(telemetry::loadRecent);
     }
 
     // ---- core-api 기준 정보(캐시) ----
@@ -193,8 +236,9 @@ public class PipelineConfig {
 
     @Bean
     IngestStore ingestStore(RawMessageRepository raws, DlqItemRepository dlq, TelemetryRepository telemetry,
-                            DeviceStateRepository states, DataGapRepository gaps, PipelineProperties properties) {
-        return new IngestStore(raws, dlq, telemetry, states, gaps, properties);
+                            DeviceStateRepository states, DataGapRepository gaps, PipelineProperties properties,
+                            net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache policies) {
+        return new IngestStore(raws, dlq, telemetry, states, gaps, properties, policies::storeMode);
     }
 
     @Bean
@@ -204,9 +248,37 @@ public class PipelineConfig {
                                     DedupGuard dedup, IngestStore store, RawMessageRepository raws,
                                     DeviceStateRepository states, TelemetryPublisher telemetry,
                                     DomainEventPublisher events, GatewayToucher gateways, IngestMetrics metrics,
+                                    net.java21.data2flow.pipeline.quality.domain.ClockSkewDetector skew,
+                                    net.java21.data2flow.pipeline.quality.domain.SuspectDetector suspects,
+                                    net.java21.data2flow.pipeline.script.service.ScriptRunner runner,
+                                    net.java21.data2flow.pipeline.formula.service.FormulaEngine formulas,
+                                    net.java21.data2flow.pipeline.telemetry.service.RecentValues recent,
                                     PipelineProperties properties, Clock clock) {
         return new IngestProcessor(new IngestProcessor.Deps(sources, devices, runtimes, quota, core, catalogs, scripts,
-                decoders, sandbox, dedup, store, raws, states, telemetry, events, gateways, metrics), properties, clock);
+                decoders, sandbox, dedup, store, raws, states, telemetry, events, gateways, metrics, skew, suspects, runner,
+                formulas, recent),
+                properties, clock);
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.quality.domain.ClockSkewDetector clockSkewDetector(PipelineProperties properties) {
+        PipelineProperties.Quality q = properties.quality();
+        return new net.java21.data2flow.pipeline.quality.domain.ClockSkewDetector(q.skewThreshold(), q.skewWindow(),
+                q.skewSustain(), q.skewClear());
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.quality.domain.SuspectDetector suspectDetector(PipelineProperties properties) {
+        return new net.java21.data2flow.pipeline.quality.domain.SuspectDetector(properties.quality().stuckCount(),
+                properties.quality().jumpRangeFraction());
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.quality.service.DataQualityService dataQualityService(
+            net.java21.data2flow.pipeline.quality.repository.DataQualityRepository repository, DeviceDirectory devices,
+            PipelineProperties properties, Clock clock) {
+        return new net.java21.data2flow.pipeline.quality.service.DataQualityService(repository, devices,
+                properties.aggregation().defaultZone(), clock);
     }
 
     @Bean
@@ -217,8 +289,13 @@ public class PipelineConfig {
     @Bean(destroyMethod = "close")
     net.java21.data2flow.pipeline.ingest.service.ReprocessJobService reprocessJobService(
             net.java21.data2flow.pipeline.ingest.repository.ReprocessJobRepository jobs, RawMessageRepository raws,
-            IngestProcessor processor, SourceContextCache sources, PipelineProperties properties, Clock clock) {
-        return new net.java21.data2flow.pipeline.ingest.service.ReprocessJobService(jobs, raws, processor, sources, properties, clock);
+            IngestProcessor processor, SourceContextCache sources, ScriptRuntimeRegistry scripts, DomainEventPublisher events,
+            ObjectProvider<LagMonitor> lag, PipelineProperties properties, Clock clock) {
+        return new net.java21.data2flow.pipeline.ingest.service.ReprocessJobService(jobs, raws, processor, sources, scripts,
+                events, properties, () -> {
+                    LagMonitor monitor = lag.getIfAvailable();
+                    return monitor == null ? 0 : monitor.lagSeconds();
+                }, clock);
     }
 
     @Bean(destroyMethod = "close")
@@ -348,8 +425,45 @@ public class PipelineConfig {
     @Bean
     PartitionMaintenanceService partitionMaintenanceService(PartitionRepository partitions, DlqItemRepository dlq,
                                                             TransactionTemplate tx, DomainEventPublisher events,
-                                                            PipelineProperties properties, Clock clock) {
-        return new PartitionMaintenanceService(partitions, dlq, tx, events, properties, clock);
+                                                            PipelineProperties properties,
+                                                            net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache policies,
+                                                            Clock clock) {
+        // 원본 메시지 일 파티션은 모든 조직 중 가장 긴 보관 기간이 지나야 지운다(짧은 조직은 보관 정리가 행 단위로)
+        return new PartitionMaintenanceService(partitions, dlq, tx, events, properties,
+                () -> policies.maxDays("RAW_MESSAGE"), clock);
+    }
+
+    // ---- 보관·콜드 보관(TSD-02·05) ----
+
+    @Bean
+    net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache retentionPolicyCache(CoreDirectory core,
+                                                                                            PipelineProperties properties,
+                                                                                            Clock clock) {
+        return new net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache(core, properties.retention(), clock);
+    }
+
+    @Bean
+    net.java21.data2flow.pipeline.retention.service.RetentionService retentionService(
+            net.java21.data2flow.pipeline.retention.repository.RetentionRepository repository, PartitionRepository partitions,
+            net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache policies,
+            ObjectProvider<net.java21.data2flow.pipeline.retention.service.ObjectStore> store, CoreDirectory core,
+            DeviceDirectory devices, DomainEventPublisher events,
+            net.java21.data2flow.pipeline.quality.repository.DataQualityRepository quality,
+            net.java21.data2flow.pipeline.script.repository.ScriptOpsRepository scriptOps, TransactionTemplate tx,
+            PipelineProperties properties, Clock clock) {
+        net.java21.data2flow.pipeline.retention.service.ObjectStore objectStore = store.getIfAvailable();
+        net.java21.data2flow.pipeline.retention.service.ArchiveService archive = objectStore == null ? null
+                : new net.java21.data2flow.pipeline.retention.service.ArchiveService(objectStore, core, repository,
+                properties.archive().prefix());
+        return new net.java21.data2flow.pipeline.retention.service.RetentionService(repository, partitions, policies, archive,
+                devices, events, quality, scriptOps, tx, properties, clock);
+    }
+
+    /** 콜드 보관 저장소: 주소를 정한 환경에서만(없으면 콜드 보관 없이 보관 기간대로 지움) */
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnExpression("'${data2flow.pipeline.archive.endpoint:}' != ''")
+    net.java21.data2flow.pipeline.retention.service.ObjectStore objectStore(PipelineProperties properties, Clock clock) {
+        return new net.java21.data2flow.pipeline.retention.service.S3ObjectStore(properties.archive(), clock);
     }
 
     @Bean

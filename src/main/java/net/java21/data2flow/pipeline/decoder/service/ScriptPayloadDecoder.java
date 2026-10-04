@@ -32,12 +32,24 @@ public class ScriptPayloadDecoder implements PayloadDecoder {
     private final Clock clock;
     private final JsonMapper mapper = MessageCodec.newMapper();
 
+    private final net.java21.data2flow.pipeline.script.service.ScriptRunner runner;
+    private final RuntimeBundle bundle;
+
     public ScriptPayloadDecoder(RuntimeBundle.Script script, ScriptSandbox sandbox, ScriptOutputValidator validator,
                                 Clock clock) {
+        this(script, sandbox, validator, clock, null, RuntimeBundle.EMPTY);
+    }
+
+    /** 운영: 공유 모듈 연결·운영 지표·오류 스냅샷을 남기는 실행 창구({@code runner})로 실행한다(SCR-03.05·04.01·05.01) */
+    public ScriptPayloadDecoder(RuntimeBundle.Script script, ScriptSandbox sandbox, ScriptOutputValidator validator,
+                                Clock clock, net.java21.data2flow.pipeline.script.service.ScriptRunner runner,
+                                RuntimeBundle bundle) {
         this.script = script;
         this.sandbox = sandbox;
         this.validator = validator;
         this.clock = clock;
+        this.runner = runner;
+        this.bundle = bundle;
     }
 
     @Override
@@ -61,7 +73,11 @@ public class ScriptPayloadDecoder implements PayloadDecoder {
         ObjectNode ctx = mapper.createObjectNode();
         ctx.set("config", script.config());
         ctx.set("source", input.get("source"));
-        ScriptOutcome outcome = sandbox.run(ScriptKind.DECODE.functionName(), script.code(),
+        ScriptOutcome outcome = runner != null
+                ? runner.run(bundle, script, ScriptKind.DECODE, mapper.writeValueAsString(input), ctx,
+                new net.java21.data2flow.pipeline.script.service.ScriptRunner.Execution(raw.organizationId(), null, null,
+                        clock.instant(), null, null, true))
+                : sandbox.run(ScriptKind.DECODE.functionName(), script.code(),
                 "script-" + script.scriptId() + "-v" + script.versionNo() + ".js",
                 mapper.writeValueAsString(input), mapper.writeValueAsString(ctx), clock.instant());
         if (!outcome.ok()) {

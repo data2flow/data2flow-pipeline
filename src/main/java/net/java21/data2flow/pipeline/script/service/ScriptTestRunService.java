@@ -40,9 +40,21 @@ public class ScriptTestRunService {
     private final Clock clock;
     private final JsonMapper mapper = MessageCodec.newMapper();
 
+    private final ScriptRunner runner;
+    private final ObjectProvider<ScriptRuntimeRegistry> registries;
+
     public ScriptTestRunService(ScriptSandbox sandbox, ScriptOutputValidator validator,
                                 ObjectProvider<RawInputLoader> rawInputs, ObjectProvider<ScriptConfigLookup> configs,
                                 Clock clock) {
+        this(sandbox, validator, rawInputs, configs, clock, null, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ScriptTestRunService(ScriptSandbox sandbox, ScriptOutputValidator validator,
+                                ObjectProvider<RawInputLoader> rawInputs, ObjectProvider<ScriptConfigLookup> configs,
+                                Clock clock, ScriptRunner runner, ObjectProvider<ScriptRuntimeRegistry> registries) {
+        this.runner = runner == null ? new ScriptRunner(sandbox, null) : runner;
+        this.registries = registries;
         this.sandbox = sandbox;
         this.validator = validator;
         this.rawInputs = rawInputs;
@@ -57,8 +69,9 @@ public class ScriptTestRunService {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
         ObjectNode ctx = context(request);
-        ScriptOutcome outcome = sandbox.run(request.kind().functionName(), request.code(), "script.js", mapper.writeValueAsString(input),
-                mapper.writeValueAsString(ctx), now);
+        ScriptOutcome outcome = runner.runUnsaved(bundleOf(request.organizationId()), request.code(), request.kind(),
+                request.moduleRefsOrEmpty(), mapper.writeValueAsString(input), ctx,
+                ScriptRunner.Execution.test(request.organizationId() == null ? 0 : request.organizationId(), now));
         List<ScriptTestRunResponse.Log> logs = outcome.logs().stream()
                 .map(l -> new ScriptTestRunResponse.Log(now.toString(), l)).toList();
         if (!outcome.ok()) {
@@ -80,6 +93,19 @@ public class ScriptTestRunService {
                     outcome.outputBytes(), null);
         } catch (ScriptOutputValidator.OutputContractException e) {
             return failure(outcome, logs, ScriptErrorCode.SCRIPT_OUTPUT_INVALID.name(), e.getMessage(), null, null);
+        }
+    }
+
+    /** 조직의 현재 번들(공유 모듈 찾기). 조직이 없거나 core를 읽지 못하면 빈 번들 */
+    private net.java21.data2flow.pipeline.script.domain.RuntimeBundle bundleOf(Long organizationId) {
+        ScriptRuntimeRegistry registry = registries == null ? null : registries.getIfAvailable();
+        if (organizationId == null || registry == null) {
+            return net.java21.data2flow.pipeline.script.domain.RuntimeBundle.EMPTY;
+        }
+        try {
+            return registry.plan(organizationId).bundle();
+        } catch (RuntimeException e) {
+            return net.java21.data2flow.pipeline.script.domain.RuntimeBundle.EMPTY;
         }
     }
 

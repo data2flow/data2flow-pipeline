@@ -23,7 +23,15 @@ public class DecoderRegistry {
     private final ScriptOutputValidator validator;
     private final Clock clock;
 
+    private final net.java21.data2flow.pipeline.script.service.ScriptRunner runner;
+
     public DecoderRegistry(ScriptSandbox sandbox, ScriptOutputValidator validator, Clock clock) {
+        this(sandbox, validator, clock, null);
+    }
+
+    public DecoderRegistry(ScriptSandbox sandbox, ScriptOutputValidator validator, Clock clock,
+                           net.java21.data2flow.pipeline.script.service.ScriptRunner runner) {
+        this.runner = runner;
         this.builtin = Map.of(
                 DecoderKeys.CHIRPSTACK_V4, new ChirpStackV4Decoder(),
                 DecoderKeys.GENERIC_JSON, new GenericJsonDecoder(),
@@ -50,7 +58,7 @@ public class DecoderRegistry {
             if (script.isEmpty()) {
                 throw IngestDecodeException.failed(key, "활성 DECODE 스크립트가 없습니다(script=" + scriptId + ")");
             }
-            return new ScriptPayloadDecoder(script.get(), sandbox, validator, clock);
+            return new ScriptPayloadDecoder(script.get(), sandbox, validator, clock, runner, plan.bundle());
         }
         throw IngestDecodeException.failed(key, "모르는 디코더입니다: " + key);
     }

@@ -37,13 +37,14 @@ public class DeviceStateRepository {
      * @param latestJson {@code {metricKey: {v, t, q, unit}}}
      */
     public void upsertReceived(long organizationId, long deviceId, Instant receivedAt, Instant measuredAt, String latestJson,
-                               Double battery, Double rssi, Double snr, String bestGateway, boolean connectivityChanged) {
+                               Double battery, Double rssi, Double snr, String bestGateway, boolean connectivityChanged,
+                               String timezone) {
         jdbc.sql("""
                         INSERT INTO data2flow_pipeline.device_state AS s (device_id, organization_id, last_seen_at,
                             last_measured_at, connectivity, connectivity_changed_at, latest, battery, rssi, snr,
-                            best_gateway_eui, updated_at)
+                            best_gateway_eui, updated_at, timezone)
                         VALUES (:device, :org, :seen, :measured, 'ONLINE', :seen, CAST(:latest AS jsonb), :battery, :rssi,
-                            :snr, :gateway, :seen)
+                            :snr, :gateway, :seen, :tz)
                         ON CONFLICT (device_id) DO UPDATE SET
                             last_seen_at = GREATEST(s.last_seen_at, EXCLUDED.last_seen_at),
                             connectivity = 'ONLINE',
@@ -62,11 +63,22 @@ public class DeviceStateRepository {
                             best_gateway_eui = CASE WHEN EXCLUDED.best_gateway_eui IS NOT NULL AND (s.last_measured_at IS NULL
                                        OR EXCLUDED.last_measured_at >= s.last_measured_at) THEN EXCLUDED.best_gateway_eui
                                        ELSE s.best_gateway_eui END,
+                            timezone = coalesce(EXCLUDED.timezone, s.timezone),
                             updated_at = EXCLUDED.updated_at""")
                 .param("device", deviceId).param("org", organizationId).param("seen", Timestamp.from(receivedAt))
                 .param("measured", Timestamp.from(measuredAt)).param("latest", latestJson).param("battery", battery)
                 .param("rssi", rssi).param("snr", snr).param("gateway", bestGateway).param("changed", connectivityChanged)
-                .update();
+                .param("tz", timezone).update();
+    }
+
+    /** 시계 오차(ING-06.04): 최근 1시간 평균 차이와 의심 상태(기기 상세 표시용) */
+    public void updateClockSkew(long organizationId, long deviceId, int avgSkewSec, Instant since, boolean suspected) {
+        jdbc.sql("""
+                        UPDATE data2flow_pipeline.device_state SET clock_skew_avg_sec = :avg, clock_skew_since = :since,
+                               clock_skew_suspected = :suspected
+                         WHERE organization_id = :org AND device_id = :device""")
+                .param("avg", avgSkewSec).param("since", since == null ? null : Timestamp.from(since))
+                .param("suspected", suspected).param("org", organizationId).param("device", deviceId).update();
     }
 
     /** TRANSFORM 직전 값(ctx.last)용 최근값 JSON {@code {key: {v, t, q, unit}}}. 없으면 빈 값 */

@@ -246,14 +246,38 @@ public class CoreApiClient implements CoreDirectory {
                         b.hasNonNull("failurePolicy") ? FailurePolicy.parse(b.get("failurePolicy").asString()) : null));
             }
             String status = text(s, "status");
+            List<String> moduleRefs = new ArrayList<>();
+            for (JsonNode m : s.path("moduleRefs")) {
+                if (m.isString()) {
+                    moduleRefs.add(m.asString());
+                } else if (text(m, "name") != null) {
+                    moduleRefs.add(text(m, "name") + "@" + lng(m, "version", lng(m, "versionNo", 0)));
+                }
+            }
+            String capture = text(s, "logCaptureUntil");
             scripts.add(new RuntimeBundle.Script(lng(s, "scriptId", 0),
                     "DECODE".equalsIgnoreCase(text(s, "kind")) ? ScriptKind.DECODE : ScriptKind.TRANSFORM,
                     lng(s, "versionId", 0), (int) lng(s, "versionNo", 0), text(s, "code"),
                     s.path("config").isObject() ? s.get("config") : mapper.createObjectNode(),
                     FailurePolicy.parse(text(s, "failurePolicy")),
-                    status == null || "ENABLED".equalsIgnoreCase(status), bindings));
+                    status == null || "ENABLED".equalsIgnoreCase(status), bindings, moduleRefs,
+                    lng(s, "configRevision", lng(s, "configVersion", 0)),
+                    capture == null ? null : Instant.parse(capture)));
         }
-        return new RuntimeBundle(lng(body, "bundleVersion", 0), scripts);
+        List<RuntimeBundle.Module> modules = new ArrayList<>();
+        for (JsonNode m : body.path("modules")) {
+            modules.add(new RuntimeBundle.Module(text(m, "name"), (int) lng(m, "versionNo", lng(m, "version", 0)),
+                    text(m, "code")));
+        }
+        List<RuntimeBundle.Formula> formulas = new ArrayList<>();
+        for (JsonNode f : body.path("formulaMetrics")) {
+            if (text(f, "status") != null && !"ACTIVE".equalsIgnoreCase(text(f, "status"))) {
+                continue;
+            }
+            formulas.add(new RuntimeBundle.Formula(lng(f, "id", 0), text(f, "resultKey"), text(f, "unit"),
+                    text(f, "expression"), text(f, "compiledJs"), text(f, "targetType"), lng(f, "targetId", 0)));
+        }
+        return new RuntimeBundle(lng(body, "bundleVersion", 0), scripts, modules, formulas);
     }
 
     @Override
@@ -264,6 +288,45 @@ public class CoreApiClient implements CoreDirectory {
         body.put("versionId", Long.toString(versionId));
         body.put("appliedAt", appliedAt.toString());
         post("/internal/core/scripts/deploy-acks", body).requireSuccess();
+    }
+
+    @Override
+    public Optional<List<net.java21.data2flow.pipeline.retention.domain.RetentionPolicies>> retentionPolicies() {
+        Response r = get("/internal/core/retention-policies");
+        if (r.status == 404) {
+            return Optional.empty();
+        }
+        JsonNode body = r.response();
+        List<net.java21.data2flow.pipeline.retention.domain.RetentionPolicies> out = new ArrayList<>();
+        JsonNode orgs = body.has("organizations") ? body.get("organizations") : body.path("responses");
+        for (JsonNode o : orgs) {
+            List<net.java21.data2flow.pipeline.retention.domain.RetentionPolicies.Item> items = new ArrayList<>();
+            JsonNode list = o.has("effective") ? o.get("effective") : o.path("policies");
+            for (JsonNode i : list) {
+                items.add(new net.java21.data2flow.pipeline.retention.domain.RetentionPolicies.Item(text(i, "scope"),
+                        text(i, "scopeRef"), text(i, "dataClass"), (int) lng(i, "retainDays", 0),
+                        intOrNull(i, "compressAfterDays"), i.path("archiveBeforeDelete").asBoolean(false),
+                        text(i, "storeMode")));
+            }
+            out.add(new net.java21.data2flow.pipeline.retention.domain.RetentionPolicies(lng(o, "organizationId", 0),
+                    lng(o, "version", 0), items));
+        }
+        return Optional.of(out);
+    }
+
+    @Override
+    public void registerArchive(ArchiveFile file) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("organizationId", Long.toString(file.organizationId()));
+        body.put("dataClass", file.dataClass());
+        body.put("rangeFrom", file.rangeFrom().toString());
+        body.put("rangeTo", file.rangeTo().toString());
+        body.put("objectKey", file.objectKey());
+        body.put("format", "PARQUET");
+        body.put("rowsCount", file.rowsCount());
+        body.put("bytes", file.bytes());
+        body.put("checksum", file.checksum());
+        post("/internal/core/archive-files", body).requireSuccess();
     }
 
     private DeviceInfo device(JsonNode d, long sourceId, String externalId) {

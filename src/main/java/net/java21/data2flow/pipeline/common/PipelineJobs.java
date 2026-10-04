@@ -62,15 +62,43 @@ public class PipelineJobs {
         private final AggregationService aggregation;
         private final OfflineDetector offline;
         private final DeviceStateRepository states;
+        private final net.java21.data2flow.pipeline.ingest.service.ReprocessJobService reprocess;
+        private final net.java21.data2flow.pipeline.quality.service.DataQualityService quality;
+        private final net.java21.data2flow.pipeline.retention.service.RetentionService retention;
         private final Clock clock;
 
         SharedJobs(PartitionMaintenanceService partitions, AggregationService aggregation, OfflineDetector offline,
-                   DeviceStateRepository states, Clock clock) {
+                   DeviceStateRepository states, net.java21.data2flow.pipeline.ingest.service.ReprocessJobService reprocess,
+                   net.java21.data2flow.pipeline.quality.service.DataQualityService quality,
+                   net.java21.data2flow.pipeline.retention.service.RetentionService retention, Clock clock) {
+            this.quality = quality;
+            this.retention = retention;
             this.partitions = partitions;
             this.aggregation = aggregation;
             this.offline = offline;
             this.states = states;
+            this.reprocess = reprocess;
             this.clock = clock;
+        }
+
+        /** 보관 정리·콜드 보관·정렬 재작성(TSD-02.01·02.03·05.01·05.02, 매일 02:00 UTC) */
+        @Scheduled(cron = "0 0 2 * * *", zone = "UTC")
+        @SchedulerLock(name = "pipeline-retention", lockAtMostFor = "5h")
+        public void retention() {
+            run("보관 정리", retention::run);
+        }
+
+        /** 기기별 일일 품질 점수(ING-06.01): 사이트 시간대 00:30이 지난 기기의 전날 점수를 확정 */
+        @Scheduled(cron = "0 0,30 * * * *", zone = "UTC")
+        @SchedulerLock(name = "pipeline-quality-daily", lockAtMostFor = "25m")
+        public void confirmQuality() {
+            run("품질 점수", quality::confirmDue);
+        }
+
+        /** 죽은 인스턴스가 맡던 재처리 작업 넘겨받기(ING-01.04). 넘겨받기는 원자적 UPDATE라 잠금 없이 모든 인스턴스가 돈다 */
+        @Scheduled(fixedDelay = 30_000, initialDelay = 30_000)
+        public void recoverReprocessJobs() {
+            run("재처리 작업 넘겨받기", reprocess::recoverStale);
         }
 
         /** 시작할 때도 이번 달·오늘 파티션이 있는지 확인한다(없으면 DEFAULT로 들어가므로) */
@@ -138,10 +166,15 @@ public class PipelineJobs {
         private final ScriptRuntimeRegistry scripts;
         private final GatewayToucher gateways;
         private final LagMonitor lag;
+        private final net.java21.data2flow.pipeline.script.service.ScriptOps scriptOps;
+        private final net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache retentionPolicies;
         private final Clock clock;
 
         InstanceJobs(DeviceDirectory devices, MetricCatalogService catalogs, ScriptRuntimeRegistry scripts,
-                     GatewayToucher gateways, LagMonitor lag, Clock clock) {
+                     GatewayToucher gateways, LagMonitor lag, net.java21.data2flow.pipeline.script.service.ScriptOps scriptOps,
+                     net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache retentionPolicies, Clock clock) {
+            this.scriptOps = scriptOps;
+            this.retentionPolicies = retentionPolicies;
             this.devices = devices;
             this.catalogs = catalogs;
             this.scripts = scripts;
@@ -173,6 +206,18 @@ public class PipelineJobs {
         @Scheduled(fixedDelay = 5_000, initialDelay = 10_000)
         public void evaluateLag() {
             lag.evaluate();
+        }
+
+        /** 보관 정책 캐시 갱신(저장 방식 ON_CHANGE 판정, TSD-05.03) */
+        @Scheduled(fixedDelayString = "${data2flow.pipeline.retention.policy-refresh:5m}", initialDelay = 1_000)
+        public void refreshRetentionPolicies() {
+            retentionPolicies.refresh();
+        }
+
+        /** 스크립트 운영 기록(지표·오류 스냅샷·로그) 쓰기(SCR-03.05·05.01·05.02) */
+        @Scheduled(fixedDelay = 5_000, initialDelay = 5_000)
+        public void flushScriptOps() {
+            scriptOps.flush();
         }
     }
 }

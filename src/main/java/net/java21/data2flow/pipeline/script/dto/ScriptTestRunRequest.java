@@ -15,7 +15,17 @@ import tools.jackson.databind.JsonNode;
  * @param scriptId       설정값을 가져올 스크립트(선택)
  * @param organizationId 조직
  * @param rawMessageId   input 대신 원본 메시지(선택, DECODE)
+ * @param moduleRefs     가져다 쓰는 모듈 {@code name@version}(선택, SCR-04.01). 모듈은 조직의 현재 번들에서 찾는다
  */
 public record ScriptTestRunRequest(@NotNull ScriptKind kind, @NotNull String code, JsonNode input, JsonNode context,
-                                   Long scriptId, Long organizationId, Long rawMessageId) {
+                                   Long scriptId, Long organizationId, Long rawMessageId, java.util.List<String> moduleRefs) {
+
+    public ScriptTestRunRequest(ScriptKind kind, String code, JsonNode input, JsonNode context, Long scriptId,
+                                Long organizationId, Long rawMessageId) {
+        this(kind, code, input, context, scriptId, organizationId, rawMessageId, null);
+    }
+
+    public java.util.List<String> moduleRefsOrEmpty() {
+        return moduleRefs == null ? java.util.List.of() : moduleRefs;
+    }
 }

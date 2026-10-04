@@ -53,8 +53,18 @@ public class PartitionMaintenanceService {
     private final Clock clock;
     private final Map<String, LocalDate> warned = new ConcurrentHashMap<>();
 
+    private final java.util.function.IntSupplier rawKeepDays;
+
     public PartitionMaintenanceService(PartitionRepository partitions, DlqItemRepository dlq, TransactionTemplate tx,
                                        DomainEventPublisher events, PipelineProperties properties, Clock clock) {
+        this(partitions, dlq, tx, events, properties, () -> (int) properties.partition().rawRetention().toDays(), clock);
+    }
+
+    /** @param rawKeepDays 원본 메시지 보관 일수(모든 조직 중 가장 긴 값, TSD-02.01) */
+    public PartitionMaintenanceService(PartitionRepository partitions, DlqItemRepository dlq, TransactionTemplate tx,
+                                       DomainEventPublisher events, PipelineProperties properties,
+                                       java.util.function.IntSupplier rawKeepDays, Clock clock) {
+        this.rawKeepDays = rawKeepDays;
         this.partitions = partitions;
         this.dlq = dlq;
         this.tx = tx;
@@ -137,7 +147,11 @@ public class PartitionMaintenanceService {
 
     private void dropExpiredRaw(LocalDate today, Instant now, List<String> dropped) {
         // 보관 30일 → 31일이 지난 일 파티션(design/erd/pipeline.md §2.1)
-        LocalDate keepFrom = today.minusDays(properties.partition().rawRetention().toDays() + 1);
+        int days = rawKeepDays.getAsInt();
+        if (days <= 0) {
+            return;
+        }
+        LocalDate keepFrom = today.minusDays(days + 1L);
         for (String name : partitions.listPartitions("raw_messages")) {
             LocalDate day = parseDay(name);
             if (day != null && day.isBefore(keepFrom)) {

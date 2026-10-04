@@ -2,6 +2,7 @@ package net.java21.data2flow.pipeline.ingest.service;
 
 import net.java21.data2flow.contracts.message.CanonicalTelemetry;
 import net.java21.data2flow.contracts.message.MessageCodec;
+import net.java21.data2flow.contracts.message.event.ClockSkewSuspected;
 import net.java21.data2flow.contracts.message.event.DeviceConnectivityChanged;
 import net.java21.data2flow.contracts.message.event.IngestGapDetected;
 import net.java21.data2flow.pipeline.common.PayloadEncoding;
@@ -45,8 +46,18 @@ public class IngestStore {
     private final PipelineProperties properties;
     private final JsonMapper mapper = MessageCodec.newMapper();
 
+    private final java.util.function.BiFunction<Long, String, String> storeModes;
+
     public IngestStore(RawMessageRepository raws, DlqItemRepository dlq, TelemetryRepository telemetry,
                        DeviceStateRepository states, DataGapRepository gaps, PipelineProperties properties) {
+        this(raws, dlq, telemetry, states, gaps, properties, (org, key) -> "ALL");
+    }
+
+    /** @param storeModes (조직, 측정 키) → 저장 방식 ALL·ON_CHANGE(TSD-05.03, 보관 정책 METRIC 범위) */
+    public IngestStore(RawMessageRepository raws, DlqItemRepository dlq, TelemetryRepository telemetry,
+                       DeviceStateRepository states, DataGapRepository gaps, PipelineProperties properties,
+                       java.util.function.BiFunction<Long, String, String> storeModes) {
+        this.storeModes = storeModes;
         this.raws = raws;
         this.dlq = dlq;
         this.telemetry = telemetry;
@@ -62,11 +73,15 @@ public class IngestStore {
         CanonicalTelemetry canonical = null;
         DeviceConnectivityChanged connectivity = null;
         IngestGapDetected gap = null;
+        ClockSkewSuspected clockSkew = null;
         int stored = 0;
         if (d.status == RawMessageStatus.OK && !d.dropped && d.device != null) {
             canonical = canonical(d, rawId);
-            stored = writeTelemetry(d, rawId);
             var prior = states.lockState(org, d.device.deviceId());
+            tools.jackson.databind.JsonNode priorLatest = prior.isEmpty() ? mapper.createObjectNode()
+                    : states.findLatest(org, d.device.deviceId()).map(mapper::readTree).orElse(mapper.createObjectNode());
+            java.util.Map<String, Instant> storedAt = new java.util.HashMap<>();
+            stored = writeTelemetry(d, rawId, priorLatest, storedAt);
             int interval = d.device.effectiveIntervalSec(properties.offline().defaultIntervalSec());
             if (prior.isEmpty() || !"ONLINE".equals(prior.get().connectivity())) {
                 DeviceConnectivityChanged.Connectivity from = prior.isEmpty() || "UNKNOWN".equals(prior.get().connectivity())
@@ -85,7 +100,12 @@ public class IngestStore {
                     }
                 }
             }
-            updateState(d, connectivity != null);
+            updateState(d, connectivity != null, priorLatest, storedAt);
+            if (d.clockSkew != null) {
+                states.updateClockSkew(org, d.device.deviceId(), d.clockSkew.avgSkewSec(), d.clockSkew.since(),
+                        d.clockSkew.suspected());
+                clockSkew = d.clockSkew.event();
+            }
             d.trace.put("canonical", mapper.valueToTree(canonical));
         }
         d.trace.stage("store", true, 0).put("rows", stored);
@@ -103,17 +123,34 @@ public class IngestStore {
         } else if (d.existing != null && d.status == RawMessageStatus.OK) {
             dlq.markResolved(org, rawId, now);
         }
-        return new Stored(rawId, canonical, connectivity, gap, stored);
+        return new Stored(rawId, canonical, connectivity, gap, stored, clockSkew);
     }
 
-    private int writeTelemetry(MessageDraft d, long rawId) {
+    private int writeTelemetry(MessageDraft d, long rawId, tools.jackson.databind.JsonNode priorLatest,
+                               java.util.Map<String, Instant> storedAt) {
         long org = d.envelope.organizationId();
         long deviceId = d.device.deviceId();
         int flags = (d.late ? TelemetryRow.FLAG_LATE : 0) | (d.reprocessing() ? TelemetryRow.FLAG_REPROCESSED : 0);
         List<TelemetryRow> rows = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
         for (MessageDraft.MetricOut m : d.metrics) {
-            rows.add(new TelemetryRow(deviceId, m.key(), d.measuredAt, org, m.value(), m.quality(), flags,
+            int rowFlags = flags;
+            if (!d.reprocessing() && "ON_CHANGE".equalsIgnoreCase(storeModes.apply(org, m.key()))) {
+                OnChange decision = onChange(priorLatest.get(m.key()), m.value(), d.measuredAt);
+                if (decision == OnChange.SKIP) {
+                    skipped.add(m.key());
+                    continue;
+                }
+                if (decision == OnChange.CHANGED) {
+                    rowFlags |= TelemetryRow.FLAG_STATE_CHANGE;
+                }
+            }
+            storedAt.put(m.key(), d.measuredAt);
+            rows.add(new TelemetryRow(deviceId, m.key(), d.measuredAt, org, m.value(), m.quality(), rowFlags,
                     d.envelope.virtual(), d.envelope.receivedAt(), rawId));
+        }
+        if (!skipped.isEmpty()) {
+            d.trace.stage("store-mode", true, 0).put("unchangedNotStored", String.join(",", skipped));
         }
         int inserted = telemetry.insertAll(rows, d.reprocessing());
         List<LinkQualityRow> links = new ArrayList<>();
@@ -133,6 +170,36 @@ public class IngestStore {
         return inserted;
     }
 
+    /** 상태형 저장 판단(TSD-05.03, BR-TSD-17) */
+    enum OnChange { SKIP, CHANGED, HEARTBEAT }
+
+    /** 상태형 측정의 하트비트 간격(BR-TSD-17: 1시간마다 한 번은 현재 값 저장) */
+    static final java.time.Duration ON_CHANGE_HEARTBEAT = java.time.Duration.ofHours(1);
+
+    /**
+     * 값이 직전 값과 같고 마지막 저장 뒤 1시간이 안 됐으면 저장하지 않는다. 직전 값이 없거나 다르면 변화(state_change 표시),
+     * 같지만 1시간이 지났으면 하트비트로 저장한다. 순서가 바뀐(더 오래된) 값은 판단하지 않고 저장한다.
+     *
+     * @param prev {@code latest[key]} = {v, t, q, unit, s(마지막 저장 측정 시각)}
+     */
+    static OnChange onChange(tools.jackson.databind.JsonNode prev, double value, Instant measuredAt) {
+        if (prev == null || !prev.path("v").isNumber()) {
+            return OnChange.CHANGED;
+        }
+        Instant last = prev.hasNonNull("t") ? Instant.parse(prev.get("t").asString()) : null;
+        if (last != null && measuredAt.isBefore(last)) {
+            return OnChange.HEARTBEAT;
+        }
+        if (Double.compare(prev.get("v").asDouble(), value) != 0) {
+            return OnChange.CHANGED;
+        }
+        Instant storedLast = prev.hasNonNull("s") ? Instant.parse(prev.get("s").asString()) : null;
+        if (storedLast == null || !measuredAt.isBefore(storedLast.plus(ON_CHANGE_HEARTBEAT))) {
+            return OnChange.HEARTBEAT;
+        }
+        return OnChange.SKIP;
+    }
+
     /** 이미 집계한 1분 구간에 들어온 값이면 다시 계산할 구간을 남긴다(BR-TSD-06, ING-06.03) */
     private void markDirtyIfAggregated(MessageDraft d) {
         Instant watermark = telemetry.currentWatermark("1m");
@@ -147,7 +214,8 @@ public class IngestStore {
         }
     }
 
-    private void updateState(MessageDraft d, boolean connectivityChanged) {
+    private void updateState(MessageDraft d, boolean connectivityChanged, tools.jackson.databind.JsonNode priorLatest,
+                             java.util.Map<String, Instant> storedAt) {
         ObjectNode latest = mapper.createObjectNode();
         Double battery = null;
         for (MessageDraft.MetricOut m : d.metrics) {
@@ -157,6 +225,13 @@ public class IngestStore {
             v.put("q", m.quality());
             if (m.unit() != null) {
                 v.put("unit", m.unit());
+            }
+            // 마지막으로 telemetry에 저장한 측정 시각(상태형 ON_CHANGE 하트비트 기준, TSD-05.03)
+            Instant s = storedAt.get(m.key());
+            if (s != null) {
+                v.put("s", s.toString());
+            } else if (priorLatest.path(m.key()).hasNonNull("s")) {
+                v.set("s", priorLatest.get(m.key()).get("s"));
             }
             if ("battery".equals(m.key())) {
                 battery = Math.max(0, Math.min(999.99, m.value()));
@@ -171,7 +246,7 @@ public class IngestStore {
         }
         states.upsertReceived(d.envelope.organizationId(), d.device.deviceId(), d.envelope.receivedAt(), d.measuredAt,
                 mapper.writeValueAsString(latest), battery, d.link == null ? null : d.link.rssi(),
-                d.link == null ? null : d.link.snr(), bestGateway, connectivityChanged);
+                d.link == null ? null : d.link.snr(), bestGateway, connectivityChanged, validZone(d.device.timezone()));
     }
 
     CanonicalTelemetry canonical(MessageDraft d, long rawId) {
@@ -194,7 +269,8 @@ public class IngestStore {
                 .metrics(metrics)
                 .link(d.link)
                 .meta(new CanonicalTelemetry.Meta(d.tags.isEmpty() ? null : d.tags, d.decoder,
-                        d.scripts.isEmpty() ? null : d.scripts))
+                        d.scripts.isEmpty() ? null : d.scripts,
+                        d.heartbeat == null ? null : java.util.Map.of("heartbeat", d.heartbeat)))
                 .rawMessageId(rawId)
                 .build();
     }
@@ -223,7 +299,21 @@ public class IngestStore {
                 d.dedupKey, d.partition, d.offset, d.externalId, d.status, d.errorCode,
                 d.errorDetail == null ? null : mapper.writeValueAsString(d.errorDetail),
                 mapper.writeValueAsString(d.trace.root()), d.status == RawMessageStatus.OK ? d.metrics.size() : null,
-                d.dropped, d.envelope.virtual(), d.envelope.receivedAt(), now);
+                d.dropped, d.envelope.virtual(), d.envelope.receivedAt(), now, storedSignature(d.envelope.signatureStatus()));
+    }
+
+    /** 사이트 시간대: IANA 이름만 보관한다(잘못된 값이 1d 집계 SQL을 깨지 않게) */
+    static String validZone(String zone) {
+        if (zone == null || zone.isBlank()) {
+            return null;
+        }
+        // 지역 이름(Asia/Seoul 등)만: '+09:00' 같은 오프셋은 PostgreSQL이 POSIX 규칙으로 부호를 거꾸로 읽는다
+        return java.time.ZoneId.getAvailableZoneIds().contains(zone) ? zone : null;
+    }
+
+    /** 서명 판정은 계약 값(VERIFIED·UNSIGNED·INVALID)만 보관한다(모르는 값은 null) */
+    static String storedSignature(String status) {
+        return status != null && java.util.Set.of("VERIFIED", "UNSIGNED", "INVALID").contains(status) ? status : null;
     }
 
     /** raw_messages.source_type은 계약 SourceTypes 값만 받는다. 모르는 값(더 새 생산자)은 CONNECTOR로 두고 원래 값은 error_detail에 */
@@ -238,8 +328,9 @@ public class IngestStore {
      * @param connectivity 수신으로 ONLINE이 된 경우의 이벤트 페이로드. 아니면 null
      * @param gap          수신 공백이 끝난 경우의 이벤트 페이로드. 아니면 null
      * @param storedRows   새로 저장한 telemetry 행 수
+     * @param clockSkew    이번에 시계 오차 의심이 된 경우의 이벤트 페이로드(ING-06.04). 아니면 null
      */
     public record Stored(long rawId, CanonicalTelemetry canonical, DeviceConnectivityChanged connectivity,
-                         IngestGapDetected gap, int storedRows) {
+                         IngestGapDetected gap, int storedRows, ClockSkewSuspected clockSkew) {
     }
 }

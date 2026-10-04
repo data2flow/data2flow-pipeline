@@ -43,6 +43,12 @@ final class MessageDraft {
     CanonicalTelemetry.DecoderRef decoder;
     final List<CanonicalTelemetry.ScriptRef> scripts = new ArrayList<>();
     byte[] payloadToStore;
+    /** 시계 오차 판정 결과(ING-06.04). 판정하지 않았으면 null */
+    net.java21.data2flow.pipeline.quality.domain.ClockSkewDetector.Observation clockSkew;
+    /** 하트비트 카나리 통과 기록(meta.heartbeat). 하트비트 기기가 아니면 null */
+    ObjectNode heartbeat;
+    /** 재처리 작업이 고정한 스크립트 계획(BR-ING-12). 실시간·단건 재처리는 null(현재 계획) */
+    net.java21.data2flow.pipeline.script.service.ScriptRuntimeRegistry.Plan pinnedPlan;
 
     MessageDraft(RawEnvelope envelope, int partition, long offset, RawMessageRow existing, JsonMapper mapper) {
         this.envelope = envelope;

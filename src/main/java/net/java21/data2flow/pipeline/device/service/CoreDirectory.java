@@ -52,6 +52,27 @@ public interface CoreDirectory {
     void deployAck(String instance, long scriptId, long versionId, Instant appliedAt);
 
     /**
+     * API-TSD-60 {@code GET /internal/core/retention-policies}: 모든 조직의 유효 보관 정책(TSD-02.01·05.01·05.03).
+     * core가 아직 제공하지 않으면(404) 빈 값 — pipeline은 시스템 기본값(NFR-04.03)으로 돈다.
+     */
+    default java.util.Optional<List<net.java21.data2flow.pipeline.retention.domain.RetentionPolicies>> retentionPolicies() {
+        return java.util.Optional.empty();
+    }
+
+    /**
+     * API-TSD-61 {@code POST /internal/core/archive-files}: 콜드 보관 파일 등록(core {@code archive_files}, TSD-05.02 파일 목록·복원).
+     * 등록이 끝나야 원본을 지운다.
+     */
+    default void registerArchive(ArchiveFile file) {
+        throw new CoreUnavailableException("core가 콜드 보관 등록을 제공하지 않습니다", null);
+    }
+
+    /** 콜드 보관 파일(API-TSD-61 요청) */
+    record ArchiveFile(long organizationId, String dataClass, Instant rangeFrom, Instant rangeTo, String objectKey,
+                       long rowsCount, long bytes, String checksum) {
+    }
+
+    /**
      * @param sourceMeta  원본 tags(location, point), deviceName 등(공간 자동 매핑 제안 ING-03.03)
      * @param metricKeys  첫 메시지의 측정 키
      */

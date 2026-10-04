@@ -19,7 +19,7 @@ public class RawMessageRepository {
             id, organization_id, source_id, device_id, message_id, source_type, topic, payload, payload_encoding,
             ingress_instance, dedup_key, stream_partition, stream_offset, external_id, status, error_code,
             error_detail::text AS error_detail, processing_trace::text AS processing_trace, metric_count, dropped,
-            is_virtual, received_at, processed_at""";
+            is_virtual, received_at, processed_at, signature_status""";
 
     private final JdbcClient jdbc;
 
@@ -63,11 +63,11 @@ public class RawMessageRepository {
                         INSERT INTO data2flow_pipeline.raw_messages (id, organization_id, source_id, device_id, message_id,
                             source_type, topic, payload, payload_encoding, ingress_instance, dedup_key, stream_partition,
                             stream_offset, external_id, status, error_code, error_detail, processing_trace, metric_count,
-                            dropped, is_virtual, received_at, processed_at)
+                            dropped, is_virtual, received_at, processed_at, signature_status)
                         OVERRIDING SYSTEM VALUE
                         VALUES (:id, :org, :source, :device, :mid, :sourceType, :topic, :payload, :encoding, :ingress, :key,
                             :partition, :offset, :external, :status, :errorCode, CAST(:errorDetail AS jsonb),
-                            CAST(:trace AS jsonb), :metricCount, :dropped, :virtual, :ra, :processedAt)""")
+                            CAST(:trace AS jsonb), :metricCount, :dropped, :virtual, :ra, :processedAt, :signature)""")
                 .param("id", r.id()).param("org", r.organizationId()).param("source", r.sourceId())
                 .param("device", r.deviceId()).param("mid", r.messageId()).param("sourceType", r.sourceType())
                 .param("topic", r.topic()).param("payload", r.payload()).param("encoding", r.payloadEncoding())
@@ -77,6 +77,7 @@ public class RawMessageRepository {
                 .param("trace", r.processingTrace()).param("metricCount", r.metricCount()).param("dropped", r.dropped())
                 .param("virtual", r.virtual()).param("ra", Timestamp.from(r.receivedAt()))
                 .param("processedAt", r.processedAt() == null ? null : Timestamp.from(r.processedAt()))
+                .param("signature", r.signatureStatus())
                 .update();
     }
 
@@ -111,6 +112,7 @@ public class RawMessageRepository {
                 rs.getLong("stream_offset"), rs.getString("external_id"), RawMessageStatus.valueOf(rs.getString("status")),
                 rs.getString("error_code"), rs.getString("error_detail"), rs.getString("processing_trace"),
                 metricNull ? null : metricCount, rs.getBoolean("dropped"), rs.getBoolean("is_virtual"),
-                rs.getTimestamp("received_at").toInstant(), processed == null ? null : processed.toInstant());
+                rs.getTimestamp("received_at").toInstant(), processed == null ? null : processed.toInstant(),
+                rs.getString("signature_status"));
     }
 }

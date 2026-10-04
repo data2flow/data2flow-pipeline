@@ -2,6 +2,7 @@ package net.java21.data2flow.pipeline.script.service;
 
 import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import net.java21.data2flow.script.sandbox.ScriptFailure;
+import net.java21.data2flow.pipeline.script.domain.RuntimeBundle;
 import net.java21.data2flow.pipeline.script.domain.ScriptKind;
 import net.java21.data2flow.pipeline.script.domain.ScriptProblem;
 import net.java21.data2flow.pipeline.script.domain.ScriptProblem.Severity;
@@ -36,6 +37,74 @@ public class ScriptStaticChecker {
     }
 
     public List<ScriptProblem> check(ScriptKind kind, String code) {
+        return check(kind, code, List.of(), ref -> java.util.Optional.empty());
+    }
+
+    /**
+     * 공유 모듈을 쓰는 코드의 검사(SCR-04.01, TC-SCR-067): {@code import … from 'module:이름@버전'}은 금지 식별자로 보지 않고
+     * 연결해 본다. 없는 모듈·버전 없는 모듈·외부 패키지·순환은 {@code SCRIPT_MODULE_NOT_FOUND}, 가져온 모듈 안의 금지 API는
+     * {@code SCRIPT_FORBIDDEN_API}(위치는 가져오는 줄)다.
+     */
+    public List<ScriptProblem> check(ScriptKind kind, String code, List<String> moduleRefs,
+                                     java.util.function.Function<String, java.util.Optional<RuntimeBundle.Module>> modules) {
+        List<ScriptProblem> problems = new ArrayList<>();
+        if (code != null && !code.isBlank() && (code.contains("import") || !moduleRefs.isEmpty())) {
+            String userCode = code;
+            java.util.Set<String> used = new java.util.LinkedHashSet<>(moduleRefs);
+            Matcher imports = MODULE_IMPORT.matcher(code);
+            StringBuilder blanked = new StringBuilder();
+            while (imports.find()) {
+                used.add(imports.group(2) + "@" + imports.group(3));
+                imports.appendReplacement(blanked, Matcher.quoteReplacement(
+                        imports.group(0).replaceAll("[^\\n]", " ")));
+            }
+            imports.appendTail(blanked);
+            try {
+                ScriptLinker.link(code, kind.functionName(), moduleRefs, modules);
+            } catch (ScriptLinker.LinkException e) {
+                problems.add(new ScriptProblem(e.line(), e.col(), Severity.ERROR, ScriptLinker.MODULE_NOT_FOUND, e.getMessage()));
+            }
+            for (String ref : used) {
+                modules.apply(ref).ifPresent(module -> {
+                    for (String word : forbiddenIn(module.code())) {
+                        int[] pos = importPosition(userCode, ref);
+                        problems.add(new ScriptProblem(pos[0], pos[1], Severity.ERROR, "SCRIPT_FORBIDDEN_API",
+                                "모듈 " + ref + "에서 금지된 API: " + word));
+                    }
+                });
+            }
+            List<ScriptProblem> rest = checkPlain(kind, blanked.toString());
+            problems.addAll(rest);
+            return problems;
+        }
+        return checkPlain(kind, code);
+    }
+
+    private static final Pattern MODULE_IMPORT = Pattern.compile(
+            "(?m)^[ \\t]*import\\s+[^;\\n]*?from\\s+(['\"])module:([a-z0-9-]{3,40})@(\\d+)\\1\\s*;?");
+
+    private List<String> forbiddenIn(String moduleCode) {
+        List<String> found = new ArrayList<>();
+        if (moduleCode == null) {
+            return found;
+        }
+        String masked = maskStringsAndComments(MODULE_IMPORT.matcher(moduleCode).replaceAll(""));
+        Matcher m = IDENTIFIER.matcher(masked);
+        while (m.find()) {
+            String word = m.group();
+            if (FORBIDDEN.contains(word) && !isPropertyName(masked, m.start(), m.end()) && !found.contains(word)) {
+                found.add(word);
+            }
+        }
+        return found;
+    }
+
+    private static int[] importPosition(String code, String ref) {
+        int at = code.indexOf("module:" + ref);
+        return at < 0 ? new int[]{1, 1} : position(code, at);
+    }
+
+    private List<ScriptProblem> checkPlain(ScriptKind kind, String code) {
         List<ScriptProblem> problems = new ArrayList<>();
         if (code == null || code.isBlank()) {
             problems.add(new ScriptProblem(1, 1, Severity.ERROR, "ENTRY_MISSING", kind.functionName() + "(…) 함수가 필요합니다"));

@@ -30,6 +30,20 @@ public class ScriptRuntimeRegistry implements ScriptConfigLookup {
     private final Clock clock;
     private final String instanceId;
     private final Map<Long, RuntimeBundle> bundles = new ConcurrentHashMap<>();
+    private volatile java.util.function.BiConsumer<RuntimeBundle, RuntimeBundle> warmer = (old, fresh) -> { };
+
+    /** 새 번들을 원자 교체하기 전에 바뀐 스크립트·수식을 데우는 단계(SCR-03.04) */
+    public void setWarmer(java.util.function.BiConsumer<RuntimeBundle, RuntimeBundle> warmer) {
+        this.warmer = warmer;
+    }
+
+    private void warm(RuntimeBundle old, RuntimeBundle fresh) {
+        try {
+            warmer.accept(old, fresh);
+        } catch (RuntimeException e) {
+            log.warn("스크립트 예열 실패(무시): {}", e.getMessage());
+        }
+    }
 
     public ScriptRuntimeRegistry(CoreDirectory core, Clock clock, String instanceId) {
         this.core = core;
@@ -49,6 +63,10 @@ public class ScriptRuntimeRegistry implements ScriptConfigLookup {
     /** 다시 읽어 바뀌었으면 교체하고 적용 보고. 새 번들을 돌려준다 */
     public RuntimeBundle reload(long organizationId) {
         RuntimeBundle fresh = core.runtimeBundle(organizationId);
+        RuntimeBundle current = bundles.get(organizationId);
+        if (current == null || current.bundleVersion() != fresh.bundleVersion()) {
+            warm(current, fresh);
+        }
         RuntimeBundle old = bundles.put(organizationId, fresh);
         if (old == null || old.bundleVersion() != fresh.bundleVersion()) {
             acknowledge(old, fresh);
@@ -63,6 +81,7 @@ public class ScriptRuntimeRegistry implements ScriptConfigLookup {
                 RuntimeBundle current = bundles.get(org);
                 RuntimeBundle fresh = core.runtimeBundle(org);
                 if (current == null || current.bundleVersion() != fresh.bundleVersion()) {
+                    warm(current, fresh);
                     bundles.put(org, fresh);
                     acknowledge(current, fresh);
                 }
