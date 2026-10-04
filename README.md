@@ -22,7 +22,7 @@
 | 구분 | 이름 |
 |---|---|
 | 읽음 | Super Stream `data2flow.raw`(그룹 `pipeline`, SAC, DB 커밋·발행 확인 뒤 오프셋 저장), fanout `data2flow.config`(`ConfigChangedMessage`, 인스턴스별 임시 큐) |
-| 냄 | Super Stream `data2flow.telemetry`(라우팅 키 deviceId, 기간 재처리 결과는 다시 내지 않음), topic `data2flow.events`: `device.connectivity.changed`, `ingest.alert.raised/cleared`, `ingest.gap.detected`, `ingest.clock-skew.suspected`, `ingest.reprocess.finished`, `aggregates.recomputed`, `retention.purged`, `partition.warning`. 읽을 수 없는 원본은 `data2flow.dlx` → `pipeline.raw.dlq` |
+| 냄 | Super Stream `data2flow.telemetry`(라우팅 키 deviceId, 기간 재처리 결과는 다시 내지 않음), topic `data2flow.events`: `device.connectivity.changed`, `ingest.alert.raised/cleared`, `ingest.gap.detected`, `ingest.clock-skew.suspected`, `ingest.reprocess.finished`, `aggregates.recomputed`, `retention.purged`, `partition.warning`, `device.state.reported`(EVT-ACT-07 LoRaWAN 업링크 신호: 승인된 실제 기기의 ChirpStack `event/up`마다 빈 `capabilities`·version=fCnt, action이 Class A 대기 다운링크를 보냄). 읽을 수 없는 원본은 `data2flow.dlx` → `pipeline.raw.dlq` |
 | 부름(core) | API-ING-21, API-DEV-120·121·122·123·124·125·130, API-SCR-32·34, API-TSD-60(보관 정책, 없으면 기본값)·61(콜드 보관 파일 등록) |
 | 받음 | API-SCR-30 `POST /internal/pipeline/scripts/check`, API-SCR-31 `…/scripts/test-run`, API-SCR-35 `…/scripts/test-cases/run`, API-SCR-36 `GET …/scripts/{script-id}/stats`, API-SCR-37 `…/formula-metrics/compile`, API-SCR-38 `…/formula-metrics/preview`, API-ING-22 `…/reprocess-items`, API-ING-23 `…/reprocess-jobs`(·`/{job-id}/cancel`), API-ING-24 `…/dlq-items/discard`, API-TSD-51 `…/telemetry/remap-metric`, API-TSD-53 `…/retention/apply-policy`, API-TSD-62 `…/retention/preview` |
 
