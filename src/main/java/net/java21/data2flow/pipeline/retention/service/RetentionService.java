@@ -257,7 +257,7 @@ public class RetentionService {
         tx.executeWithoutResult(s -> {
             partitions.setLockTimeout(properties.partition().lockTimeout().toMillis());
             partitions.detachAndDrop(parent, part.name());
-            partitions.markDropped(part.name(), now);
+            repository.markDroppedOrArchived(part.name(), now);
         });
         report.droppedPartitions.add(part.name());
         String dataClass = Target.dataClassOf(parent);

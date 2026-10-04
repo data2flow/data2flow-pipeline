@@ -203,6 +203,8 @@ public record PipelineProperties(
      * @param deleteBatch         행 단위 삭제 배치(BR-TSD-02: 1만 행)
      * @param compressAfterDays   정렬 재작성 대상(BR-TSD-07: 7일 지난 원본 파티션)
      * @param policyRefresh       core 보관 정책을 다시 읽는 주기
+     * @param jobEnabled          야간 보관 정리 실행 여부. staging은 끈다(DB를 prod와 함께 쓰므로 prod 인스턴스만 지우고 prod 버킷에
+     *                            콜드 보관, ADR-030)
      */
     public record Retention(@DefaultValue("30") int rawMessageDays,
                             @DefaultValue("365") int telemetryDays,
@@ -216,7 +218,8 @@ public record PipelineProperties(
                             @DefaultValue("7") int scriptLogDays,
                             @DefaultValue("10000") int deleteBatch,
                             @DefaultValue("7") int compressAfterDays,
-                            @DefaultValue("5m") Duration policyRefresh) {
+                            @DefaultValue("5m") Duration policyRefresh,
+                            @DefaultValue("true") boolean jobEnabled) {
     }
 
     /**

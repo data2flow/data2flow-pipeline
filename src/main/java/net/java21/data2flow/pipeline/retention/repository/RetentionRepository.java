@@ -238,6 +238,16 @@ public class RetentionRepository {
         return jdbc.queryForList("SELECT DISTINCT organization_id FROM data2flow_pipeline.device_state", Long.class);
     }
 
+    /** 지운 파티션 표시: 콜드 보관한 적이 있으면 ARCHIVED, 아니면 DROPPED(design/erd/pipeline.md §3.6) */
+    @OrganizationScopeExempt("파티션 등록 정보")
+    public void markDroppedOrArchived(String partition, Instant now) {
+        jdbc.update("""
+                UPDATE data2flow_pipeline.partition_registries
+                   SET state = CASE WHEN archive_bytes IS NOT NULL AND archive_bytes > 0 THEN 'ARCHIVED' ELSE 'DROPPED' END,
+                       updated_at = ?
+                 WHERE partition_name = ?""", Timestamp.from(now), partition);
+    }
+
     /** 파티션 범위 */
     public record PartitionRange(String name, Instant from, Instant to) {
     }

@@ -82,6 +82,14 @@ public abstract class IntegrationTestSupport {
     private ConfigChangeListener configListener;
     @Autowired
     private PartitionMaintenanceService partitions;
+    @Autowired
+    private net.java21.data2flow.pipeline.quality.domain.ClockSkewDetector skew;
+    @Autowired
+    private net.java21.data2flow.pipeline.quality.domain.SuspectDetector suspects;
+    @Autowired
+    private net.java21.data2flow.pipeline.telemetry.service.RecentValues recent;
+    @Autowired
+    protected net.java21.data2flow.pipeline.retention.service.RetentionPolicyCache retentionPolicies;
     @LocalServerPort
     protected int port;
 
@@ -105,6 +113,10 @@ public abstract class IntegrationTestSupport {
             partitionsReady = true;
         }
         configListener.invalidateAll();
+        skew.reset();
+        suspects.reset();
+        recent.clear();
+        retentionPolicies.refresh();
         for (int p = 0; p < 12; p++) {
             dedup.clear(p);
         }
@@ -126,7 +138,10 @@ public abstract class IntegrationTestSupport {
                 TRUNCATE data2flow_pipeline.raw_messages, data2flow_pipeline.dlq_items, data2flow_pipeline.telemetry,
                     data2flow_pipeline.telemetry_1m, data2flow_pipeline.telemetry_1h, data2flow_pipeline.telemetry_1d,
                     data2flow_pipeline.link_qualities, data2flow_pipeline.agg_watermarks, data2flow_pipeline.agg_dirty_ranges,
-                    data2flow_pipeline.device_state, data2flow_pipeline.data_gaps""").update();
+                    data2flow_pipeline.device_state, data2flow_pipeline.data_gaps, data2flow_pipeline.reprocess_jobs,
+                    data2flow_pipeline.data_quality_daily, data2flow_pipeline.telemetry_long, data2flow_pipeline.archive_exports,
+                    data2flow_pipeline.script_errors, data2flow_pipeline.script_stats_1m, data2flow_pipeline.script_stats_1h,
+                    data2flow_pipeline.script_logs""").update();
     }
 
     /** 앞 시험의 메시지 처리가 끝날 때까지(처리 중 0이 0.3초 이어짐) */

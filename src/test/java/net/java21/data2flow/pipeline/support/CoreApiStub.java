@@ -54,6 +54,9 @@ public final class CoreApiStub {
     private final List<JsonNode> gatewayTouches = new CopyOnWriteArrayList<>();
     private final List<JsonNode> deployAcks = new CopyOnWriteArrayList<>();
     private volatile boolean down;
+    private final Map<Long, ArrayNode> retention = new ConcurrentHashMap<>();
+    private final List<JsonNode> archiveFiles = new CopyOnWriteArrayList<>();
+    private volatile boolean archiveRegistrationFails;
 
     public CoreApiStub() {
         try {
@@ -90,6 +93,9 @@ public final class CoreApiStub {
         unverifiedRequests.clear();
         gatewayTouches.clear();
         deployAcks.clear();
+        retention.clear();
+        archiveFiles.clear();
+        archiveRegistrationFails = false;
         down = false;
         metricVersion.set(1);
         source(3, 1, "chirpstack-v4", "AUTO_REGISTER", null);
@@ -232,6 +238,80 @@ public final class CoreApiStub {
         bundle.put("bundleVersion", bundle.get("bundleVersion").asLong() + 1);
     }
 
+    private ObjectNode bundle(long organizationId) {
+        return bundles.computeIfAbsent(organizationId, o -> {
+            ObjectNode b = mapper.createObjectNode();
+            b.put("bundleVersion", 0);
+            b.putArray("scripts");
+            return b;
+        });
+    }
+
+    private void bump(ObjectNode bundle) {
+        bundle.put("bundleVersion", bundle.get("bundleVersion").asLong() + 1);
+    }
+
+    /** 실행 번들의 스크립트 하나(scriptId)를 고친다(설정값·모듈 참조·로그 수집 등). 번들 판이 오른다 */
+    public synchronized ObjectNode scriptNode(long organizationId, long scriptId) {
+        for (JsonNode n : bundle(organizationId).path("scripts")) {
+            if (n.get("scriptId").asString().equals(Long.toString(scriptId))) {
+                bump(bundle(organizationId));
+                return (ObjectNode) n;
+            }
+        }
+        throw new IllegalArgumentException("script " + scriptId);
+    }
+
+    /** 공유 모듈 버전(SCR-04.01) */
+    public synchronized void module(long organizationId, String name, int versionNo, String code) {
+        ObjectNode b = bundle(organizationId);
+        ArrayNode modules = b.has("modules") ? (ArrayNode) b.get("modules") : b.putArray("modules");
+        modules.addObject().put("name", name).put("versionNo", versionNo).put("code", code);
+        bump(b);
+    }
+
+    /** 수식 항목(SCR-01.06) */
+    public synchronized void formula(long organizationId, long id, String resultKey, String unit, String expression,
+                                     String targetType, long targetId) {
+        ObjectNode b = bundle(organizationId);
+        ArrayNode list = b.has("formulaMetrics") ? (ArrayNode) b.get("formulaMetrics") : b.putArray("formulaMetrics");
+        ObjectNode f = list.addObject();
+        f.put("id", Long.toString(id));
+        f.put("resultKey", resultKey);
+        if (unit != null) {
+            f.put("unit", unit);
+        }
+        f.put("expression", expression);
+        f.put("targetType", targetType);
+        f.put("targetId", Long.toString(targetId));
+        f.put("status", "ACTIVE");
+        bump(b);
+    }
+
+    /** 보관 정책 항목(API-TSD-60) */
+    public synchronized void retentionPolicy(long organizationId, String scope, String scopeRef, String dataClass,
+                                             int retainDays, boolean archive, String storeMode) {
+        ObjectNode i = retention.computeIfAbsent(organizationId, o -> mapper.createArrayNode()).addObject();
+        i.put("scope", scope);
+        if (scopeRef != null) {
+            i.put("scopeRef", scopeRef);
+        }
+        i.put("dataClass", dataClass);
+        i.put("retainDays", retainDays);
+        i.put("archiveBeforeDelete", archive);
+        if (storeMode != null) {
+            i.put("storeMode", storeMode);
+        }
+    }
+
+    public List<JsonNode> archiveFiles() {
+        return List.copyOf(archiveFiles);
+    }
+
+    public void archiveRegistrationFails(boolean fails) {
+        this.archiveRegistrationFails = fails;
+    }
+
     public List<String> calls() {
         return List.copyOf(calls);
     }
@@ -353,6 +433,27 @@ public final class CoreApiStub {
                     bundle.putArray("scripts");
                 }
                 send(exchange, 200, ok(bundle.deepCopy()));
+                return;
+            }
+            if ("GET".equals(method) && path.equals("/internal/core/retention-policies")) {
+                ObjectNode body = mapper.createObjectNode();
+                ArrayNode orgs = body.putArray("organizations");
+                retention.forEach((org, items) -> {
+                    ObjectNode o = orgs.addObject();
+                    o.put("organizationId", Long.toString(org));
+                    o.put("version", items.size());
+                    o.set("effective", items.deepCopy());
+                });
+                send(exchange, 200, ok(body));
+                return;
+            }
+            if ("POST".equals(method) && path.equals("/internal/core/archive-files")) {
+                if (archiveRegistrationFails) {
+                    send(exchange, 503, error("SERVICE_UNAVAILABLE"));
+                    return;
+                }
+                archiveFiles.add(mapper.readTree(requestBody));
+                send(exchange, 201, ok(mapper.createObjectNode().put("id", Integer.toString(archiveFiles.size()))));
                 return;
             }
             if ("POST".equals(method) && path.equals("/internal/core/scripts/deploy-acks")) {

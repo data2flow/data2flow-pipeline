@@ -65,12 +65,15 @@ public class PipelineJobs {
         private final net.java21.data2flow.pipeline.ingest.service.ReprocessJobService reprocess;
         private final net.java21.data2flow.pipeline.quality.service.DataQualityService quality;
         private final net.java21.data2flow.pipeline.retention.service.RetentionService retention;
+        private final PipelineProperties properties;
         private final Clock clock;
 
         SharedJobs(PartitionMaintenanceService partitions, AggregationService aggregation, OfflineDetector offline,
                    DeviceStateRepository states, net.java21.data2flow.pipeline.ingest.service.ReprocessJobService reprocess,
                    net.java21.data2flow.pipeline.quality.service.DataQualityService quality,
-                   net.java21.data2flow.pipeline.retention.service.RetentionService retention, Clock clock) {
+                   net.java21.data2flow.pipeline.retention.service.RetentionService retention,
+                   PipelineProperties properties, Clock clock) {
+            this.properties = properties;
             this.quality = quality;
             this.retention = retention;
             this.partitions = partitions;
@@ -85,7 +88,9 @@ public class PipelineJobs {
         @Scheduled(cron = "0 0 2 * * *", zone = "UTC")
         @SchedulerLock(name = "pipeline-retention", lockAtMostFor = "5h")
         public void retention() {
-            run("보관 정리", retention::run);
+            if (properties.retention().jobEnabled()) {
+                run("보관 정리", retention::run);
+            }
         }
 
         /** 기기별 일일 품질 점수(ING-06.01): 사이트 시간대 00:30이 지난 기기의 전날 점수를 확정 */

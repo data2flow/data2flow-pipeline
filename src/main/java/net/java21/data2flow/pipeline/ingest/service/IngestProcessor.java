@@ -197,7 +197,7 @@ public class IngestProcessor {
         IngestStore.Stored stored = deps.store.persist(d, clock.instant());
         deps.metrics.processed(env.sourceId(), d.status);
         boolean published = false;
-        if (stored.canonical() != null) {
+        if (stored.canonical() != null && shouldPublish(d)) {
             deps.telemetry.publish(stored.canonical());
             published = true;
             if (live) {
@@ -218,6 +218,18 @@ public class IngestProcessor {
                     env.receivedAt()));
         }
         return new Outcome(d.status, stored.rawId(), published, d.errorCode, false);
+    }
+
+    /**
+     * 표준 메시지를 {@code data2flow.telemetry}에 낼지. 실시간은 언제나 낸다. 기간 재처리 작업(고정 번들)은 내지 않는다 — 플로우가 과거 값에
+     * 다시 반응하지 않게 하고, 바뀐 구간은 집계 재계산과 {@code ingest.reprocess.finished}로 알린다(ADR-048 후속 결정). 단건 재처리
+     * (API-ING-22)는 전에 발행하지 못한(실패한) 원본만 낸다(이미 낸 메시지를 두 번 내지 않음).
+     */
+    private static boolean shouldPublish(MessageDraft d) {
+        if (!d.reprocessing()) {
+            return true;
+        }
+        return d.pinnedPlan == null && d.existing.status() != RawMessageStatus.OK;
     }
 
     private void publishEvents(long organizationId, IngestStore.Stored stored) {

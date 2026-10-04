@@ -101,7 +101,7 @@ public class ReprocessJobRepository {
                            AND ((status = 'PENDING' AND (owner_instance = :instance OR heartbeat_at IS NULL
                                                          OR heartbeat_at < :stale))
                              OR (status = 'RUNNING' AND heartbeat_at < :stale))
-                        RETURNING """ + COLUMNS)
+                        RETURNING """ + " " + COLUMNS)
                 .param("instance", instance).param("now", Timestamp.from(now)).param("id", jobId)
                 .param("stale", Timestamp.from(staleBefore))
                 .query(ReprocessJobRepository::map).optional();
@@ -146,7 +146,7 @@ public class ReprocessJobRepository {
         return jdbc.sql("""
                         UPDATE data2flow_pipeline.reprocess_jobs SET status = 'CANCELLED', finished_at = :now
                          WHERE organization_id = :org AND id = :id AND status IN ('PENDING','RUNNING')
-                        RETURNING """ + COLUMNS)
+                        RETURNING """ + " " + COLUMNS)
                 .param("now", Timestamp.from(now)).param("org", organizationId).param("id", jobId)
                 .query(ReprocessJobRepository::map).optional();
     }

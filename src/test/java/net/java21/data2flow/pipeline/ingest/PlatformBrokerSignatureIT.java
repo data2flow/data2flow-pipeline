@@ -145,7 +145,7 @@ class PlatformBrokerSignatureIT extends IntegrationTestSupport {
     }
 
     @Test
-    @DisplayName("[DSC-03.05] 승인된 기기의 원본을 재처리하면 서명 결과가 없으므로 거부하지 않고 quality 2(미검증)로 둔다")
+    @DisplayName("[ING-01.04][DSC-03.05] 재처리: 원본에 보관한 서명 판정이 VERIFIED면 quality 0을 유지하고(ADR-042), 판정이 없는(M5 이전) 원본은 거부하지 않고 quality 2(미검증)")
     void reprocessKeepsUnverified() {
         CORE.device(193, 1, SOURCE, "esp32-co2-05", "ACTIVE", null, null, 60);
         RawEnvelope verified = message("esp32-co2-05", 640, SignatureStatus.VERIFIED);
@@ -154,9 +154,19 @@ class PlatformBrokerSignatureIT extends IntegrationTestSupport {
         long rawId = jdbc.sql("SELECT id FROM data2flow_pipeline.raw_messages WHERE message_id = :id")
                 .param("id", verified.messageId()).query(Long.class).single();
 
+        assertThat(jdbc.sql("SELECT signature_status FROM data2flow_pipeline.raw_messages WHERE id = :id").param("id", rawId)
+                .query(String.class).single()).isEqualTo("VERIFIED");
+
         IngestProcessor.Outcome outcome = processor.reprocess(raws.findById(1, rawId).orElseThrow());
 
-        assertThat(outcome.status()).isNotEqualTo(RawMessageStatus.INVALID);
+        assertThat(outcome.status()).isEqualTo(RawMessageStatus.OK);
+        assertThat(jdbc.sql("SELECT max(quality) FROM data2flow_pipeline.telemetry WHERE device_id = 193")
+                .query(Integer.class).single()).isZero();
+
+        jdbc.sql("UPDATE data2flow_pipeline.raw_messages SET signature_status = NULL WHERE id = :id").param("id", rawId).update();
+        IngestProcessor.Outcome legacy = processor.reprocess(raws.findById(1, rawId).orElseThrow());
+
+        assertThat(legacy.status()).isNotEqualTo(RawMessageStatus.INVALID);
         assertThat(jdbc.sql("SELECT max(quality) FROM data2flow_pipeline.telemetry WHERE device_id = 193")
                 .query(Integer.class).single()).isEqualTo(2);
     }

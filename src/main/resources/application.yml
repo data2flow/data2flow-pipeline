@@ -142,3 +142,40 @@ data2flow:
     lag:
       warn: 60s
       critical: 300s
+    # 기간 재처리 작업(ING-01.04, BR-ING-13): 초당 한도, 실시간 지연이 경고 기준을 넘을 때 한도, 멈춘 작업 넘겨받기 기준
+    reprocess:
+      rate-per-second: 500
+      slow-rate-per-second: 100
+      stale-after: 2m
+    # 데이터 품질(ING-04.01 의심, ING-06.04 시계 오차, BR-ING-18)
+    quality:
+      stuck-count: 12
+      jump-range-fraction: 0.1875
+      skew-threshold: 5m
+      skew-window: 1h
+      skew-sustain: 30m
+      skew-clear: 2m
+    # 보관 기본값(NFR-04.03, TSD domain-model §2.7). 조직 정책(core API-TSD-60)이 있으면 그 값
+    retention:
+      raw-message-days: 30
+      telemetry-days: 365
+      link-days: 90
+      agg1m-days: 90
+      agg1h-days: 1095
+      agg1d-days: 0
+      quality-days: 365
+      script-stats1m-days: 7
+      script-stats1h-days: 90
+      script-log-days: 7
+      delete-batch: 10000
+      compress-after-days: 7
+      policy-refresh: 5m
+      job-enabled: true
+    # 콜드 보관 오브젝트 저장소(TSD-05.02, S3 API). 주소를 비우면 콜드 보관 없이 보관 기간대로 지운다
+    archive:
+      endpoint: ${DATA2FLOW_ARCHIVE_ENDPOINT:}
+      bucket: ${DATA2FLOW_ARCHIVE_BUCKET:data2flow-prod}
+      region: ${DATA2FLOW_ARCHIVE_REGION:us-east-1}
+      access-key: ${DATA2FLOW_ARCHIVE_ACCESS_KEY:}
+      secret-key: ${DATA2FLOW_ARCHIVE_SECRET_KEY:}
+      prefix: archive

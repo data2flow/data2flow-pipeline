@@ -12,3 +12,6 @@ spring:
 data2flow:
   pipeline:
     flyway-mode: migrate
+    # 보관 정리·콜드 보관은 prod 인스턴스만(같은 DB를 지우고 prod 버킷에 올린다, ADR-030)
+    retention:
+      job-enabled: false
