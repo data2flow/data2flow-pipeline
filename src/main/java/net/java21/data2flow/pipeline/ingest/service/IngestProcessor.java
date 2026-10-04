@@ -218,8 +218,10 @@ public class IngestProcessor {
             deps.recent.record(d.device.deviceId(), d.measuredAt, values, d.late);
         }
         if (d.status == RawMessageStatus.OK && d.link != null && d.link.gateways() != null) {
-            d.link.gateways().forEach(g -> deps.gateways.record(env.organizationId(), env.sourceId(), g.eui(),
-                    env.receivedAt()));
+            // 가상 실행(simRunId)의 수신 시각은 시뮬레이션 시각(SIMULATED 정책이면 과거)이라 게이트웨이 마지막 수신으로 쓰면
+            // 바로 오프라인 알람이 난다(DEV-05.03). 가상 게이트웨이는 처리 시각으로 기록한다
+            Instant seenAt = env.simRunId() != null ? clock.instant() : env.receivedAt();
+            d.link.gateways().forEach(g -> deps.gateways.record(env.organizationId(), env.sourceId(), g.eui(), seenAt));
         }
         return new Outcome(d.status, stored.rawId(), published, d.errorCode, false);
     }
