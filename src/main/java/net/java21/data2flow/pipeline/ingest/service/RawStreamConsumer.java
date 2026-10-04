@@ -93,6 +93,9 @@ public class RawStreamConsumer implements SmartLifecycle {
         while (running && consumer == null) {
             try {
                 connection.ensureSuperStream(SuperStreamSpec.RAW);
+                // 이 서비스가 생산자인 data2flow.telemetry도 소비를 시작할 때 만든다. 첫 발행 때까지 미루면 소비자(flow-engine·core)가
+                // 먼저 떠서 없는 Super Stream을 기다리게 된다
+                connection.ensureSuperStream(SuperStreamSpec.TELEMETRY);
                 consumer = connection.environment().consumerBuilder()
                         .superStream(MessagingNames.STREAM_RAW)
                         .name(groupName())
