@@ -355,6 +355,23 @@ class IngestPathIT extends IntegrationTestSupport {
                 assertThat(t.get("items").get(0).get("gatewayEui").asString()).isEqualTo("24e124fffef79304"));
     }
 
+    @Test
+    @DisplayName("[DEV-05.03][SIM-02.07] 가상 실행(SIMULATED, 과거 수신 시각)의 가상 게이트웨이는 처리 시각으로 기록해 오프라인 알람이 나지 않게 한다")
+    void simulatedRunGatewayTouchUsesProcessingTime() {
+        CORE.device(32, 1, 3, "24e1240000000032", "ACTIVE", null, null, 60);
+        String payload = uplink("24e1240000000032", UUID.randomUUID().toString(), "2026-08-10T03:00:00Z", 1, "{\"temperature\":30}");
+        Instant simulated = Instant.parse("2026-08-10T03:00:00Z");
+        byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
+        publish(new RawEnvelope(RawEnvelope.VERSION, UUID.randomUUID(), 1, 3, "MQTT_SUBSCRIBE", TOPIC.formatted("24e1240000000032"), bytes,
+                simulated, "data2flow-simulator-0", DedupKeys.detect(3, TOPIC.formatted("24e1240000000032"), bytes), true, 77L));
+        awaitTelemetry(1);
+
+        gateways.flush();
+
+        assertThat(CORE.gatewayTouches()).singleElement().satisfies(t ->
+                assertThat(Instant.parse(t.get("items").get(0).get("seenAt").asString())).isEqualTo(clock.instant()));
+    }
+
     /** 테스트 시계 기준 시각 */
     private static final class MutableClockInstant {
         static final Instant T0 = net.java21.data2flow.pipeline.support.MutableClock.T0;
