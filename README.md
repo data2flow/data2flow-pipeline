@@ -1,6 +1,6 @@
 # data2flow-pipeline
 
-수집 경로(M2)의 처리 서비스입니다. `data2flow.raw`를 읽어 디코딩, DECODE·TRANSFORM 스크립트(GraalJS 커뮤니티판 샌드박스), 기기 식별·자동 등록(PENDING), 검증·중복 제거, 시계열 저장(월 파티션), 1m/1h/1d 집계, 오프라인 판정을 하고 `data2flow.telemetry`와 도메인 이벤트를 냅니다.
+수집 경로(M2)의 처리 서비스입니다. `data2flow.raw`를 읽어 디코딩, DECODE·TRANSFORM 스크립트(GraalJS 커뮤니티판 샌드박스, 공용 모듈 `data2flow-script-sandbox`·ADR-046), 기기 식별·자동 등록(PENDING), 검증·중복 제거, 시계열 저장(월 파티션), 1m/1h/1d 집계, 오프라인 판정을 하고 `data2flow.telemetry`와 도메인 이벤트를 냅니다.
 
 - 관련 스펙: ING, SCR, TSD, DEV-02.05·02.08·04.03·05.01, NFR-02 (정본은 비공개 저장소 `data2flow-docs`)
 - 패키지: `net.java21.data2flow.pipeline` · Spring Boot 4.1.1 · Java 21 · Maven Wrapper

@@ -1,6 +1,7 @@
 package net.java21.data2flow.pipeline.script.service;
 
-import net.java21.data2flow.pipeline.script.domain.ScriptFailure;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptFailure;
 import net.java21.data2flow.pipeline.script.domain.ScriptKind;
 import net.java21.data2flow.pipeline.script.domain.ScriptProblem;
 import net.java21.data2flow.pipeline.script.domain.ScriptProblem.Severity;

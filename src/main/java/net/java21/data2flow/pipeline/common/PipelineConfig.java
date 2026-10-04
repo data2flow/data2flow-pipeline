@@ -36,7 +36,7 @@ import net.java21.data2flow.pipeline.partition.repository.PartitionRepository;
 import net.java21.data2flow.pipeline.partition.service.PartitionMaintenanceService;
 import net.java21.data2flow.pipeline.script.service.ScriptOutputValidator;
 import net.java21.data2flow.pipeline.script.service.ScriptRuntimeRegistry;
-import net.java21.data2flow.pipeline.script.service.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import net.java21.data2flow.pipeline.script.service.ScriptStaticChecker;
 import net.java21.data2flow.pipeline.telemetry.repository.DataGapRepository;
 import net.java21.data2flow.pipeline.telemetry.repository.DeviceStateRepository;

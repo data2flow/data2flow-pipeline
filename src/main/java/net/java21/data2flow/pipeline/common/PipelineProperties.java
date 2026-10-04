@@ -1,6 +1,7 @@
 package net.java21.data2flow.pipeline.common;
 
-import net.java21.data2flow.pipeline.script.domain.ScriptLimits;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptLimits;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
@@ -91,8 +92,8 @@ public record PipelineProperties(
                     maxStringLength, maxArrayLength, maxCodeBytes, maxOutputDepth);
         }
 
-        public net.java21.data2flow.pipeline.script.service.ScriptSandbox.WarmUpPolicy toWarmUpPolicy() {
-            return new net.java21.data2flow.pipeline.script.service.ScriptSandbox.WarmUpPolicy(warmUpRounds, warmUpMaxRounds,
+        public ScriptSandbox.WarmUpPolicy toWarmUpPolicy() {
+            return new ScriptSandbox.WarmUpPolicy(warmUpRounds, warmUpMaxRounds,
                     warmUpStableRounds, warmUpTarget, warmUpMaxTime);
         }
     }

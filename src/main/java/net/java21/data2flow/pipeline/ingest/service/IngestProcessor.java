@@ -44,10 +44,10 @@ import net.java21.data2flow.pipeline.metric.service.MetricCatalogService;
 import net.java21.data2flow.pipeline.metric.service.MetricValueMapper;
 import net.java21.data2flow.pipeline.script.domain.FailurePolicy;
 import net.java21.data2flow.pipeline.script.domain.ScriptKind;
-import net.java21.data2flow.pipeline.script.domain.ScriptOutcome;
+import net.java21.data2flow.script.sandbox.ScriptOutcome;
 import net.java21.data2flow.pipeline.script.service.ScriptOutputValidator;
 import net.java21.data2flow.pipeline.script.service.ScriptRuntimeRegistry;
-import net.java21.data2flow.pipeline.script.service.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import net.java21.data2flow.pipeline.telemetry.repository.DeviceStateRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -506,7 +506,7 @@ public class IngestProcessor {
             ctx.set("config", step.script().config());
             long id = step.script().scriptId();
             int version = step.script().versionNo();
-            ScriptOutcome outcome = deps.sandbox.run(ScriptKind.TRANSFORM, step.script().code(),
+            ScriptOutcome outcome = deps.sandbox.run(ScriptKind.TRANSFORM.functionName(), step.script().code(),
                     "script-" + id + "-v" + version + ".js", mapper.writeValueAsString(msg), mapper.writeValueAsString(ctx),
                     clock.instant());
             deps.metrics.script(id, version, outcome.durationMs(), outcome.ok());

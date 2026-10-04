@@ -5,7 +5,7 @@ import net.java21.data2flow.contracts.message.decoder.PayloadDecoder;
 import net.java21.data2flow.pipeline.device.domain.SourceContext;
 import net.java21.data2flow.pipeline.script.service.ScriptOutputValidator;
 import net.java21.data2flow.pipeline.script.service.ScriptRuntimeRegistry;
-import net.java21.data2flow.pipeline.script.service.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 
 import java.time.Clock;
 import java.util.Map;

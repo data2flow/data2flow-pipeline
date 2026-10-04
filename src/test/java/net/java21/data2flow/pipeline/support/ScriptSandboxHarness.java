@@ -2,8 +2,8 @@ package net.java21.data2flow.pipeline.support;
 
 import net.java21.data2flow.pipeline.common.PipelineProperties;
 import net.java21.data2flow.pipeline.script.domain.ScriptKind;
-import net.java21.data2flow.pipeline.script.domain.ScriptOutcome;
-import net.java21.data2flow.pipeline.script.service.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptOutcome;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.bind.PropertySourcesPlaceholdersResolver;
 import org.springframework.boot.context.properties.source.ConfigurationPropertySources;
@@ -13,17 +13,13 @@ import org.springframework.core.io.ClassPathResource;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.net.URISyntaxException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
-import java.util.stream.Stream;
 
 /**
- * SCR test-plan "샌드박스 하네스": 운영과 같은 {@link ScriptSandbox}를 운영 설정 파일(application.yml)의 한도로 만든다.
- * 공격 코퍼스는 {@code src/test/resources/script-attacks/*.js} 파일 하나가 공격 하나다(첫 줄 {@code // expect: 코드|코드}).
+ * SCR test-plan "샌드박스 하네스": 운영과 같은 {@link ScriptSandbox}(공용 모듈 data2flow-script-sandbox, ADR-046)를 운영 설정 파일
+ * (application.yml)의 한도로 만든다. 공격 코퍼스 42종과 샌드박스 자체 시험은 공용 모듈로 옮겼고, 여기서는 pipeline 쪽 연결
+ * (진입 함수 decode·transform, 설정 바인딩)만 쓴다.
  */
 public final class ScriptSandboxHarness {
 
@@ -60,54 +56,10 @@ public final class ScriptSandboxHarness {
     }
 
     public static ScriptOutcome transform(String code, String input, String ctx) {
-        return SANDBOX.run(ScriptKind.TRANSFORM, code, "script.js", input, ctx, Instant.parse("2026-10-03T00:00:00Z"));
+        return SANDBOX.run(ScriptKind.TRANSFORM.functionName(), code, "script.js", input, ctx, Instant.parse("2026-10-03T00:00:00Z"));
     }
 
     public static ScriptOutcome decode(String code, String input, String ctx) {
-        return SANDBOX.run(ScriptKind.DECODE, code, "script.js", input, ctx, Instant.parse("2026-10-03T00:00:00Z"));
-    }
-
-    /** 공격 코퍼스 중 이름이 prefix로 시작하는 파일 */
-    public static Stream<Attack> attacks(String prefix) {
-        try {
-            Path dir = Path.of(ScriptSandboxHarness.class.getResource("/script-attacks").toURI());
-            try (Stream<Path> files = Files.list(dir)) {
-                return files.filter(p -> p.getFileName().toString().startsWith(prefix))
-                        .sorted()
-                        .map(ScriptSandboxHarness::attack)
-                        .toList()
-                        .stream();
-            }
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        } catch (URISyntaxException e) {
-            throw new IllegalStateException(e);
-        }
-    }
-
-    private static Attack attack(Path file) {
-        try {
-            String code = Files.readString(file, StandardCharsets.UTF_8);
-            String first = code.lines().findFirst().orElse("");
-            List<String> expected = first.startsWith("// expect:")
-                    ? List.of(first.substring("// expect:".length()).trim().split("\\|"))
-                    : List.of();
-            return new Attack(file.getFileName().toString(), code, expected);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    /** 공격 하나: 파일 이름, 코드, 허용 결과(OK 또는 오류 코드) */
-    public record Attack(String name, String code, List<String> expected) {
-
-        public String resultOf(ScriptOutcome outcome) {
-            return outcome.ok() ? "OK" : outcome.failure().code().name();
-        }
-
-        @Override
-        public String toString() {
-            return name;
-        }
+        return SANDBOX.run(ScriptKind.DECODE.functionName(), code, "script.js", input, ctx, Instant.parse("2026-10-03T00:00:00Z"));
     }
 }

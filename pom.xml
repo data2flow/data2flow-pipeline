@@ -100,15 +100,11 @@
             <groupId>com.rabbitmq</groupId>
             <artifactId>stream-client</artifactId>
         </dependency>
-        <!-- 사용자 스크립트 샌드박스: GraalJS 커뮤니티판(UPL). org.graalvm.polyglot:js(Oracle판, GFTC)는 금지(ADR-008). 버전은 data2flow-bom -->
+        <!-- 사용자 스크립트 샌드박스: 공용 모듈(ADR-046). GraalJS 커뮤니티판(polyglot + js-community, UPL)을 함께 가져온다.
+             org.graalvm.polyglot:js(Oracle판, GFTC)는 금지(ADR-008, 아래 enforcer). 버전은 data2flow-bom -->
         <dependency>
-            <groupId>org.graalvm.polyglot</groupId>
-            <artifactId>polyglot</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>org.graalvm.polyglot</groupId>
-            <artifactId>js-community</artifactId>
-            <type>pom</type>
+            <groupId>net.java21.data2flow</groupId>
+            <artifactId>data2flow-script-sandbox</artifactId>
         </dependency>
         <!-- 분산 추적(OPS-02.03): Micrometer Tracing + OpenTelemetry. ingress → pipeline을 하나의 추적으로 잇는다(traceparent).
              내보내기 주소를 설정한 환경에서만 내보낸다. Apache-2.0 -->

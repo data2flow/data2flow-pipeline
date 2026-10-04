@@ -8,10 +8,10 @@ import net.java21.data2flow.contracts.message.decoder.DecoderKeys;
 import net.java21.data2flow.contracts.message.decoder.PayloadDecoder;
 import net.java21.data2flow.pipeline.script.domain.RuntimeBundle;
 import net.java21.data2flow.pipeline.script.domain.ScriptKind;
-import net.java21.data2flow.pipeline.script.domain.ScriptOutcome;
+import net.java21.data2flow.script.sandbox.ScriptOutcome;
 import net.java21.data2flow.pipeline.script.service.ScriptInputs;
 import net.java21.data2flow.pipeline.script.service.ScriptOutputValidator;
-import net.java21.data2flow.pipeline.script.service.ScriptSandbox;
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -61,7 +61,7 @@ public class ScriptPayloadDecoder implements PayloadDecoder {
         ObjectNode ctx = mapper.createObjectNode();
         ctx.set("config", script.config());
         ctx.set("source", input.get("source"));
-        ScriptOutcome outcome = sandbox.run(ScriptKind.DECODE, script.code(),
+        ScriptOutcome outcome = sandbox.run(ScriptKind.DECODE.functionName(), script.code(),
                 "script-" + script.scriptId() + "-v" + script.versionNo() + ".js",
                 mapper.writeValueAsString(input), mapper.writeValueAsString(ctx), clock.instant());
         if (!outcome.ok()) {

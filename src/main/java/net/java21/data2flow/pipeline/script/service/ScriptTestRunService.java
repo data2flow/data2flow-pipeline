@@ -1,12 +1,13 @@
 package net.java21.data2flow.pipeline.script.service;
 
+import net.java21.data2flow.script.sandbox.ScriptSandbox;
 import net.java21.data2flow.contracts.error.BusinessException;
 import net.java21.data2flow.contracts.error.CommonErrorCode;
 import net.java21.data2flow.contracts.message.MessageCodec;
 import net.java21.data2flow.pipeline.common.PayloadEncoding;
-import net.java21.data2flow.pipeline.script.domain.ScriptErrorCode;
+import net.java21.data2flow.script.sandbox.ScriptErrorCode;
 import net.java21.data2flow.pipeline.script.domain.ScriptKind;
-import net.java21.data2flow.pipeline.script.domain.ScriptOutcome;
+import net.java21.data2flow.script.sandbox.ScriptOutcome;
 import net.java21.data2flow.pipeline.script.dto.ScriptTestRunRequest;
 import net.java21.data2flow.pipeline.script.dto.ScriptTestRunResponse;
 import org.springframework.beans.factory.ObjectProvider;
@@ -56,7 +57,7 @@ public class ScriptTestRunService {
             throw new BusinessException(CommonErrorCode.INVALID_REQUEST);
         }
         ObjectNode ctx = context(request);
-        ScriptOutcome outcome = sandbox.run(request.kind(), request.code(), "script.js", mapper.writeValueAsString(input),
+        ScriptOutcome outcome = sandbox.run(request.kind().functionName(), request.code(), "script.js", mapper.writeValueAsString(input),
                 mapper.writeValueAsString(ctx), now);
         List<ScriptTestRunResponse.Log> logs = outcome.logs().stream()
                 .map(l -> new ScriptTestRunResponse.Log(now.toString(), l)).toList();
