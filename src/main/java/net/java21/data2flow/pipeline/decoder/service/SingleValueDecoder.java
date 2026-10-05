@@ -33,7 +33,11 @@ public class SingleValueDecoder implements PayloadDecoder {
     public DecodedUplink decode(RawEnvelope raw, JsonNode config) throws DecodeException {
         String topic = raw.topic() == null ? "" : raw.topic();
         String[] parts = java.util.Arrays.stream(topic.split("/")).filter(s -> !s.isBlank()).toArray(String[]::new);
-        if (parts.length < 2) {
+        // DSC-09.08: 토픽 템플릿 값(externalId·metric)이 있으면 그것을 쓴다
+        Map<String, String> attrs = raw.topicAttributes() == null ? Map.of() : raw.topicAttributes();
+        String attrId = attrs.get(net.java21.data2flow.contracts.message.IngressStatus.ATTR_EXTERNAL_ID);
+        String attrMetric = attrs.get(net.java21.data2flow.contracts.message.IngressStatus.ATTR_METRIC);
+        if (parts.length < 2 && (attrId == null || attrMetric == null)) {
             throw new IngestDecodeException(key(), IngestDecodeException.EXTERNAL_ID_MISSING,
                     "토픽에서 기기 ID를 찾을 수 없습니다: " + topic);
         }
@@ -52,7 +56,7 @@ public class SingleValueDecoder implements PayloadDecoder {
         if (Double.isNaN(value) || Double.isInfinite(value)) {
             throw new IngestDecodeException(key(), IngestDecodeException.VALUE_NOT_NUMERIC, "payload가 유한한 숫자가 아닙니다");
         }
-        return new DecodedUplink(parts[parts.length - 2], null,
-                List.of(DecodedValue.of(parts[parts.length - 1], value)), null, Map.of());
+        return new DecodedUplink(attrId != null ? attrId : parts[parts.length - 2], null,
+                List.of(DecodedValue.of(attrMetric != null ? attrMetric : parts[parts.length - 1], value)), null, Map.of());
     }
 }

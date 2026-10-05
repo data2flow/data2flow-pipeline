@@ -299,7 +299,9 @@ public class IngestStore {
                 d.dedupKey, d.partition, d.offset, d.externalId, d.status, d.errorCode,
                 d.errorDetail == null ? null : mapper.writeValueAsString(d.errorDetail),
                 mapper.writeValueAsString(d.trace.root()), d.status == RawMessageStatus.OK ? d.metrics.size() : null,
-                d.dropped, d.envelope.virtual(), d.envelope.receivedAt(), now, storedSignature(d.envelope.signatureStatus()));
+                d.dropped, d.envelope.virtual(), d.envelope.receivedAt(), now, storedSignature(d.envelope.signatureStatus()),
+                storedFormat(d.envelope.payloadFormat()), storedOriginal(d.envelope.originalPayload()),
+                d.envelope.topicAttributes() == null ? null : mapper.writeValueAsString(d.envelope.topicAttributes()));
     }
 
     /** 사이트 시간대: IANA 이름만 보관한다(잘못된 값이 1d 집계 SQL을 깨지 않게) */
@@ -309,6 +311,20 @@ public class IngestStore {
         }
         // 지역 이름(Asia/Seoul 등)만: '+09:00' 같은 오프셋은 PostgreSQL이 POSIX 규칙으로 부호를 거꾸로 읽는다
         return java.time.ZoneId.getAvailableZoneIds().contains(zone) ? zone : null;
+    }
+
+    /** ingress 변환 형식은 계약 값(PayloadFormat 이름)만 보관한다(모르는 값은 null, DSC-09.07) */
+    static String storedFormat(String format) {
+        return format != null && java.util.Set.of("JSON", "CBOR", "MSGPACK", "PROTOBUF", "AVRO", "CSV", "TEXT", "BINARY",
+                "SPARKPLUG_B").contains(format) ? format : null;
+    }
+
+    /** 변환 전 원본: payload와 같은 크기 규칙(256KB 초과는 앞 4KB만, TC-ING-003) */
+    private byte[] storedOriginal(byte[] original) {
+        if (original == null) {
+            return null;
+        }
+        return original.length > properties.ingest().maxPayloadBytes() ? Arrays.copyOf(original, STORED_PREFIX_BYTES) : original;
     }
 
     /** 서명 판정은 계약 값(VERIFIED·UNSIGNED·INVALID)만 보관한다(모르는 값은 null) */

@@ -2,6 +2,7 @@ package net.java21.data2flow.pipeline.ingest.service;
 
 import net.java21.data2flow.contracts.message.CanonicalTelemetry;
 import net.java21.data2flow.contracts.message.EventType;
+import net.java21.data2flow.contracts.message.IngressStatus;
 import net.java21.data2flow.contracts.message.MessageCodec;
 import net.java21.data2flow.contracts.message.RawEnvelope;
 import net.java21.data2flow.contracts.message.SignatureStatus;
@@ -147,7 +148,8 @@ public class IngestProcessor {
         }
         RawEnvelope envelope = new RawEnvelope(RawEnvelope.VERSION, raw.messageId(), raw.organizationId(), raw.sourceId(),
                 raw.sourceType(), raw.topic(), raw.payload(), raw.receivedAt(), raw.ingressInstance(), raw.dedupKey(),
-                raw.virtual(), null, raw.signatureStatus());
+                raw.virtual(), null, raw.signatureStatus(), raw.payloadFormat(), raw.originalPayload(),
+                topicAttributes(raw.topicAttributes()), null, null);
         MessageDraft draft = new MessageDraft(envelope, raw.streamPartition(), raw.streamOffset(), raw, mapper);
         draft.pinnedPlan = pinned;
         return run(draft, false);
@@ -273,6 +275,12 @@ public class IngestProcessor {
                     "payload가 " + properties.ingest().maxPayloadBytes() + "바이트를 넘습니다: " + env.payload().length, mapper);
             return;
         }
+        // DSC-09.07·09.08 BR-DSC-28: ingress가 형식을 풀 수 없었거나(DECODE_ERROR) 토픽 템플릿에 맞지 않은(UNMATCHED_TOPIC) 메시지는
+        // 디코딩하지 않고 원본만 남긴다
+        if (env.ingressStatus() != null) {
+            ingressRejected(d);
+            return;
+        }
         // DSC-03.03: ingress가 서명 키가 있는 기기의 서명 없음·불일치로 판정한 메시지는 디코딩 없이 거부한다
         if (SourceTypes.PLATFORM_BROKER.equals(env.sourceType()) && SignatureStatus.INVALID.equals(env.signatureStatus())) {
             signatureRejected(d, "서명 키가 있는 기기의 메시지인데 서명이 없거나 맞지 않습니다");
@@ -318,6 +326,7 @@ public class IngestProcessor {
             decodeFailed(d, DecodeException.RESULT_CODE, e.getMessage(), e.decoderKey(), null, started);
             return;
         }
+        uplink = withTopicAttributes(uplink, env.topicAttributes());
         // 한도(ING-07.01)
         Optional<MessageLimitValidator.Violation> violation = limits.check(uplink.values());
         if (violation.isPresent()) {
@@ -373,6 +382,65 @@ public class IngestProcessor {
         }
         // ⑥ 검증·품질(ING-04.01·04.02, BR-ING-03·06)
         qualify(d, catalog);
+    }
+
+    /**
+     * ingress 미처리 판정(DSC-09.07·09.08, BR-DSC-28). UNMATCHED_TOPIC은 INVALID + 오류 코드 UNMATCHED_TOPIC(같은 템플릿이면 재처리해도
+     * 같으므로 재처리 대상이 아님), DECODE_ERROR는 DECODE_ERROR + ING_DECODE_FAILED(실패 보관함 DECODE). 기기 ID는 템플릿 값이 있으면 그것.
+     */
+    private void ingressRejected(MessageDraft d) {
+        RawEnvelope env = d.envelope;
+        Map<String, String> attrs = env.topicAttributes();
+        if (attrs != null && attrs.get(IngressStatus.ATTR_EXTERNAL_ID) != null) {
+            d.externalId = DeviceDirectory.normalize(attrs.get(IngressStatus.ATTR_EXTERNAL_ID));
+        }
+        String message = env.ingressError() == null ? env.ingressStatus() : env.ingressError();
+        if (IngressStatus.DECODE_ERROR.equals(env.ingressStatus())) {
+            d.fail(RawMessageStatus.DECODE_ERROR, DecodeException.RESULT_CODE, message, mapper);
+        } else {
+            d.fail(RawMessageStatus.INVALID, env.ingressStatus(), message, mapper);
+        }
+        d.errorDetail.put("ingressStatus", env.ingressStatus());
+        if (env.payloadFormat() != null) {
+            d.errorDetail.put("payloadFormat", env.payloadFormat());
+        }
+        d.trace.stage("ingress", false, 0).put("ingressStatus", env.ingressStatus());
+    }
+
+    /**
+     * 토픽 템플릿 값 적용(DSC-09.08, AT-DSC-16.4): {@code externalId}가 있으면 기기 ID로 쓰고, {@code metric}이 있고 값이 하나뿐이면 그 값의
+     * 측정 키로 쓴다. 나머지 변수와 {@code spaceHint}는 태그로 더한다(디코더 태그가 같은 이름이면 디코더 값 유지).
+     */
+    static DecodedUplink withTopicAttributes(DecodedUplink uplink, Map<String, String> attrs) {
+        if (attrs == null || attrs.isEmpty()) {
+            return uplink;
+        }
+        String externalId = attrs.get(IngressStatus.ATTR_EXTERNAL_ID);
+        String metric = attrs.get(IngressStatus.ATTR_METRIC);
+        List<DecodedValue> values = uplink.values();
+        if (metric != null && !metric.isBlank() && values.size() == 1) {
+            DecodedValue only = values.get(0);
+            values = List.of(new DecodedValue(metric, only.value(), only.unit()));
+        }
+        Map<String, String> tags = new LinkedHashMap<>();
+        attrs.forEach((k, v) -> {
+            if (!k.equals(IngressStatus.ATTR_EXTERNAL_ID) && !k.equals(IngressStatus.ATTR_METRIC) && v != null && !v.isEmpty()) {
+                tags.put(k, v);
+            }
+        });
+        tags.putAll(uplink.tags());
+        return new DecodedUplink(externalId == null || externalId.isBlank() ? uplink.externalId() : externalId,
+                uplink.measuredAt(), values, uplink.link(), tags);
+    }
+
+    /** 보관한 topic_attributes(JSON 텍스트) → 맵. 없거나 깨졌으면 null */
+    private Map<String, String> topicAttributes(String json) {
+        if (json == null || json.isBlank()) {
+            return null;
+        }
+        Map<String, String> out = new LinkedHashMap<>();
+        mapper.readTree(json).properties().forEach(e -> out.put(e.getKey(), e.getValue().asString()));
+        return out;
     }
 
     /** 고정한 번들(재처리 작업)이 있으면 그것, 아니면 조직의 현재 계획 */

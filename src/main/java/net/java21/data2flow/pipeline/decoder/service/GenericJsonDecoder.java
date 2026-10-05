@@ -60,6 +60,9 @@ public class GenericJsonDecoder implements PayloadDecoder {
                     "JSON을 해석하지 못했습니다: " + ChirpStackV4Decoder.firstLine(e.getMessage()), null, e);
         }
         String externalId = externalId(raw.topic(), root, config.get("deviceIdFrom").asString());
+        if ((externalId == null || externalId.isBlank()) && raw.topicAttributes() != null) {
+            externalId = raw.topicAttributes().get(net.java21.data2flow.contracts.message.IngressStatus.ATTR_EXTERNAL_ID);   // DSC-09.08
+        }
         if (externalId == null || externalId.isBlank()) {
             throw new IngestDecodeException(key(), IngestDecodeException.EXTERNAL_ID_MISSING,
                     "기기 ID를 찾을 수 없습니다: " + config.get("deviceIdFrom").asString());

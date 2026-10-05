@@ -15,5 +15,6 @@ public record RawMessageRow(long id, long organizationId, long sourceId, Long de
                             int streamPartition, long streamOffset, String externalId, RawMessageStatus status,
                             String errorCode, String errorDetail, String processingTrace, Integer metricCount,
                             boolean dropped, boolean virtual, Instant receivedAt, Instant processedAt,
-                            String signatureStatus) {
+                            String signatureStatus, String payloadFormat, byte[] originalPayload,
+                            String topicAttributes) {
 }
