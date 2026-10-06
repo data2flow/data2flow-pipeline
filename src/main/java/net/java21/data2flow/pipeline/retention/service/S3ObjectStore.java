@@ -31,7 +31,7 @@ public class S3ObjectStore implements ObjectStore {
 
     private final PipelineProperties.Archive settings;
     private final String endpoint;
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5)).build();
+    private final HttpClient http = HttpClient.newBuilder().version(HttpClient.Version.HTTP_1_1).connectTimeout(Duration.ofSeconds(5)).build();
     private final Clock clock;
 
     public S3ObjectStore(PipelineProperties.Archive settings, Clock clock) {

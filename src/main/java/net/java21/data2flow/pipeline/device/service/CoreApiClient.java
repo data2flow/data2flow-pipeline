@@ -1,5 +1,6 @@
 package net.java21.data2flow.pipeline.device.service;
 
+import net.java21.data2flow.contracts.http.InternalHttpClients;
 import net.java21.data2flow.contracts.message.MessageCodec;
 import net.java21.data2flow.pipeline.common.PipelineProperties;
 import net.java21.data2flow.pipeline.device.domain.AutoRegisterResult;
@@ -52,7 +53,7 @@ public class CoreApiClient implements CoreDirectory {
         this.settings = settings;
         this.baseUrl = settings.baseUrl().endsWith("/") ? settings.baseUrl().substring(0, settings.baseUrl().length() - 1)
                 : settings.baseUrl();
-        this.http = HttpClient.newBuilder().connectTimeout(settings.connectTimeout()).build();
+        this.http = InternalHttpClients.create(settings.connectTimeout());
     }
 
     @Override
