@@ -225,6 +225,15 @@ public class PipelineConfig {
     }
 
     @Bean
+    net.java21.data2flow.pipeline.telemetry.service.DerivedPointService derivedPointService(DeviceDirectory devices,
+            net.java21.data2flow.pipeline.telemetry.repository.TelemetryRepository telemetry, DeviceStateRepository states,
+            RawMessageRepository raws, TelemetryPublisher publisher,
+            org.springframework.transaction.support.TransactionTemplate tx, Clock clock) {
+        return new net.java21.data2flow.pipeline.telemetry.service.DerivedPointService(devices, telemetry, states, raws, publisher, tx,
+                clock);
+    }
+
+    @Bean
     GatewayToucher gatewayToucher(CoreDirectory core) {
         return new GatewayToucher(core);
     }
